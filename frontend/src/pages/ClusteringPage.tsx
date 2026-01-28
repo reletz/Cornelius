@@ -1,13 +1,24 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Layers, Edit2, Trash2, ArrowRight, Loader2, Merge } from 'lucide-react'
+import { Layers, Edit2, Trash2, ArrowRight, Loader2, Merge, Settings2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { Card, CardHeader, CardBody, CardFooter } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
+import PromptOptionsPanel from '../components/PromptOptionsPanel'
 import { useAppStore } from '../store/appStore'
 import { analyzeAndCluster, listClusters, updateCluster, deleteCluster, mergeClusters } from '../lib/api'
 import { cn } from '../lib/utils'
+
+// Loading messages for clustering
+const CLUSTERING_MESSAGES = [
+  "🔍 Reading your documents...",
+  "📖 Understanding the content...",
+  "🧩 Finding related topics...",
+  "📊 Grouping similar concepts...",
+  "🎯 Identifying key themes...",
+  "✨ Organizing clusters...",
+]
 
 export default function ClusteringPage() {
   const navigate = useNavigate()
@@ -18,10 +29,23 @@ export default function ClusteringPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
   const [selectedClusters, setSelectedClusters] = useState<string[]>([])
+  const [showPromptOptions, setShowPromptOptions] = useState(false)
+  const [loadingMessageIndex, setLoadingMessageIndex] = useState(0)
   const [merging, setMerging] = useState(false)
   
   // Prevent double-call in React StrictMode
   const hasAnalyzedRef = useRef(false)
+
+  // Rotate loading messages
+  useEffect(() => {
+    if (!analyzing) return
+    
+    const interval = setInterval(() => {
+      setLoadingMessageIndex((prev) => (prev + 1) % CLUSTERING_MESSAGES.length)
+    }, 2500)
+    
+    return () => clearInterval(interval)
+  }, [analyzing])
 
   useEffect(() => {
     if (!sessionId) return
@@ -167,8 +191,10 @@ export default function ClusteringPage() {
           {analyzing ? (
             <div className="flex flex-col items-center justify-center py-12">
               <Loader2 className="h-12 w-12 text-primary-500 animate-spin mb-4" />
-              <p className="text-gray-600">Analyzing documents with AI...</p>
-              <p className="text-sm text-gray-500">This may take a moment</p>
+              <p className="text-gray-600 font-medium animate-pulse">
+                {CLUSTERING_MESSAGES[loadingMessageIndex]}
+              </p>
+              <p className="text-sm text-gray-500 mt-2">This may take a moment</p>
             </div>
           ) : clusters.length === 0 ? (
             <div className="text-center py-12">
@@ -282,6 +308,23 @@ export default function ClusteringPage() {
                   </li>
                 ))}
               </ul>
+
+              {/* Prompt Options Section */}
+              <div className="mt-6 pt-6 border-t border-gray-200">
+                <button
+                  onClick={() => setShowPromptOptions(!showPromptOptions)}
+                  className="flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+                >
+                  <Settings2 className="h-4 w-4" />
+                  {showPromptOptions ? 'Hide' : 'Show'} Generation Options
+                </button>
+                
+                {showPromptOptions && (
+                  <div className="mt-4">
+                    <PromptOptionsPanel />
+                  </div>
+                )}
+              </div>
             </>
           )}
         </CardBody>

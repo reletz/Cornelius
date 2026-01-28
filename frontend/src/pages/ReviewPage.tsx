@@ -75,14 +75,14 @@ export default function ReviewPage() {
 
   return (
     <div className="max-w-5xl mx-auto">
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* Note list sidebar */}
-        <div className="lg:col-span-1">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 lg:gap-6">
+        {/* Note list sidebar - collapsible on mobile */}
+        <div className="lg:col-span-1 order-2 lg:order-1">
           <Card>
             <CardHeader>
               <h3 className="font-medium text-gray-900">Notes ({notes.length})</h3>
             </CardHeader>
-            <CardBody className="p-2">
+            <CardBody className="p-2 max-h-48 lg:max-h-none overflow-y-auto">
               <ul className="space-y-1">
                 {notes.map((note, index) => {
                   const cluster = clusters.find(c => c.id === note.clusterId)
@@ -119,7 +119,7 @@ export default function ReviewPage() {
                 onClick={handleDownloadMarkdown}
               >
                 <Download className="mr-2 h-4 w-4" />
-                Download Markdown (ZIP)
+                {notes.length === 1 ? 'Download Markdown' : 'Download Markdown (ZIP)'}
               </Button>
               <Button 
                 variant="secondary" 
@@ -142,16 +142,16 @@ export default function ReviewPage() {
         </div>
 
         {/* Note preview */}
-        <div className="lg:col-span-3">
+        <div className="lg:col-span-3 order-1 lg:order-2">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <div className="p-2 bg-primary-100 rounded-lg">
-                    <FileText className="h-6 w-6 text-primary-600" />
+                    <FileText className="h-5 w-5 sm:h-6 sm:w-6 text-primary-600" />
                   </div>
                   <div>
-                    <h2 className="text-lg font-semibold text-gray-900">
+                    <h2 className="text-base sm:text-lg font-semibold text-gray-900 line-clamp-1">
                       {currentCluster?.title || 'Note Preview'}
                     </h2>
                     <p className="text-sm text-gray-500">

@@ -4,7 +4,7 @@ Export routes - PDF and Markdown download.
 import io
 import zipfile
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,8 +21,9 @@ async def export_markdown(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Export all notes as a ZIP file containing markdown files.
-    Obsidian-compatible format.
+    Export notes as markdown.
+    - Single note: Direct .md file download
+    - Multiple notes: ZIP file containing markdown files
     """
     # Verify session
     session_stmt = select(Session).where(Session.id == session_id)
@@ -40,21 +41,41 @@ async def export_markdown(
     if not clusters:
         raise HTTPException(status_code=400, detail="No clusters found")
     
-    # Create ZIP in memory
+    # Collect all notes with their titles
+    notes_data = []
+    for cluster in clusters:
+        note_stmt = select(Note).where(Note.cluster_id == cluster.id).order_by(Note.created_at.desc()).limit(1)
+        note_result = await db.execute(note_stmt)
+        note = note_result.scalar_one_or_none()
+        
+        if note and note.markdown_content:
+            safe_title = "".join(c for c in cluster.title if c.isalnum() or c in (' ', '-', '_')).rstrip()
+            notes_data.append({
+                "title": safe_title,
+                "content": note.markdown_content
+            })
+    
+    if not notes_data:
+        raise HTTPException(status_code=400, detail="No notes found")
+    
+    # Single note: return direct .md file
+    if len(notes_data) == 1:
+        note = notes_data[0]
+        return Response(
+            content=note["content"],
+            media_type="text/markdown",
+            headers={
+                "Content-Disposition": f"attachment; filename={note['title']}.md"
+            }
+        )
+    
+    # Multiple notes: return ZIP file
     zip_buffer = io.BytesIO()
     
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for cluster in clusters:
-            note_stmt = select(Note).where(Note.cluster_id == cluster.id).order_by(Note.created_at.desc()).limit(1)
-            note_result = await db.execute(note_stmt)
-            note = note_result.scalar_one_or_none()
-            
-            if note and note.markdown_content:
-                # Sanitize filename
-                safe_title = "".join(c for c in cluster.title if c.isalnum() or c in (' ', '-', '_')).rstrip()
-                filename = f"{safe_title}.md"
-                
-                zip_file.writestr(filename, note.markdown_content)
+        for note in notes_data:
+            filename = f"{note['title']}.md"
+            zip_file.writestr(filename, note["content"])
     
     zip_buffer.seek(0)
     

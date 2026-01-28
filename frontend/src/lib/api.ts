@@ -97,10 +97,22 @@ export const mergeClusters = async (clusterIds: string[], newTitle: string) => {
 }
 
 // ===== Generation API =====
-export const generateNotes = async (sessionId: string, clusterIds?: string[]) => {
+export interface PromptOptionsPayload {
+  use_default: boolean
+  language: string
+  depth: string
+  custom_prompt?: string
+}
+
+export const generateNotes = async (
+  sessionId: string, 
+  clusterIds?: string[],
+  promptOptions?: PromptOptionsPayload
+) => {
   const response = await api.post('/generate/', {
     session_id: sessionId,
     cluster_ids: clusterIds,
+    prompt_options: promptOptions,
   })
   return response.data
 }
@@ -110,14 +122,32 @@ export const getGenerationStatus = async (taskId: string) => {
   return response.data
 }
 
+// Transform snake_case to camelCase for notes
+const transformNote = (note: {
+  id: string
+  cluster_id: string
+  markdown_content: string
+  status: string
+  created_at: string
+}) => ({
+  id: note.id,
+  clusterId: note.cluster_id,
+  markdownContent: note.markdown_content,
+  status: note.status,
+  createdAt: note.created_at,
+})
+
 export const listNotes = async (sessionId: string) => {
   const response = await api.get(`/generate/notes/${sessionId}`)
-  return response.data
+  return {
+    notes: response.data.notes.map(transformNote),
+    total: response.data.total,
+  }
 }
 
 export const getNote = async (noteId: string) => {
   const response = await api.get(`/generate/note/${noteId}`)
-  return response.data
+  return transformNote(response.data)
 }
 
 // ===== Export API =====

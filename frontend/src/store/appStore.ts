@@ -31,6 +31,13 @@ export interface Note {
   createdAt: string
 }
 
+export interface PromptOptions {
+  useDefault: boolean
+  language: 'en' | 'id'
+  depth: 'concise' | 'balanced' | 'indepth'
+  customPrompt: string
+}
+
 interface AppState {
   // API Key (stored in localStorage)
   apiKey: string | null
@@ -55,6 +62,10 @@ interface AppState {
   notes: Note[]
   setNotes: (notes: Note[]) => void
   
+  // Prompt options
+  promptOptions: PromptOptions
+  setPromptOptions: (options: Partial<PromptOptions>) => void
+  
   // Generation task
   generationTaskId: string | null
   setGenerationTaskId: (id: string | null) => void
@@ -73,6 +84,12 @@ const initialState = {
   documents: [],
   clusters: [],
   notes: [],
+  promptOptions: {
+    useDefault: true,
+    language: 'en' as const,
+    depth: 'balanced' as const,
+    customPrompt: '',
+  },
   generationTaskId: null,
   currentStep: 0,
 }
@@ -108,6 +125,10 @@ export const useAppStore = create<AppState>()(
       
       setNotes: (notes) => set({ notes }),
       
+      setPromptOptions: (options) => set((state) => ({
+        promptOptions: { ...state.promptOptions, ...options }
+      })),
+      
       setGenerationTaskId: (id) => set({ generationTaskId: id }),
       
       setCurrentStep: (step) => set({ currentStep: step }),
@@ -119,6 +140,7 @@ export const useAppStore = create<AppState>()(
         notes: [],
         generationTaskId: null,
         currentStep: 0,
+        // Keep promptOptions for user preference
       }),
     }),
     {
@@ -127,6 +149,7 @@ export const useAppStore = create<AppState>()(
         apiKey: state.apiKey,
         sessionId: state.sessionId,
         currentStep: state.currentStep,
+        promptOptions: state.promptOptions, // Persist prompt preferences
       }),
     }
   )

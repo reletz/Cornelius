@@ -33,7 +33,8 @@ async def generate_notes_task(
     task_id: str,
     cluster_ids: list,
     api_key: str,
-    session_id: str
+    session_id: str,
+    prompt_options: dict = None
 ):
     """Background task for note generation."""
     from sqlalchemy import delete
@@ -85,11 +86,12 @@ async def generate_notes_task(
                         
                         combined_content = "\n\n".join(source_content)
                         
-                        # Generate note
+                        # Generate note with prompt options
                         markdown = await note_generation_service.generate_note(
                             topic_title=cluster.title,
                             source_content=combined_content,
-                            api_key=api_key
+                            api_key=api_key,
+                            prompt_options=prompt_options
                         )
                         
                         # Save note
@@ -169,12 +171,23 @@ async def generate_notes(
     )
     
     # Queue background task
+    # Convert prompt_options to dict for background task
+    prompt_opts_dict = None
+    if request.prompt_options:
+        prompt_opts_dict = {
+            "use_default": request.prompt_options.use_default,
+            "language": request.prompt_options.language,
+            "depth": request.prompt_options.depth,
+            "custom_prompt": request.prompt_options.custom_prompt
+        }
+    
     background_tasks.add_task(
         generate_notes_task,
         task_id,
         cluster_ids,
         api_key,
-        request.session_id
+        request.session_id,
+        prompt_opts_dict
     )
     
     return GenerateResponse(

@@ -106,9 +106,18 @@ class NoteListResponse(BaseModel):
 
 
 # ===== Generation Schemas =====
+class PromptOptions(BaseModel):
+    """Options for prompt customization."""
+    use_default: bool = True  # True = use default prompt, False = use custom
+    language: str = "en"  # "en" or "id"
+    depth: str = "balanced"  # "concise", "balanced", or "indepth"
+    custom_prompt: Optional[str] = None  # Used when use_default=False
+
+
 class GenerateRequest(BaseModel):
     session_id: str
     cluster_ids: Optional[List[str]] = None  # None means generate all
+    prompt_options: Optional[PromptOptions] = None  # None means default balanced English
 
 
 class GenerateResponse(BaseModel):

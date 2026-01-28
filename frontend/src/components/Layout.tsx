@@ -42,10 +42,10 @@ export default function Layout({ children }: LayoutProps) {
       </header>
 
       {/* Progress Steps */}
-      <div className="bg-white border-b border-gray-200">
+      <div className="bg-white border-b border-gray-200 overflow-x-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <nav className="flex items-center justify-center py-4">
-            <ol className="flex items-center space-x-4">
+          <nav className="flex items-center justify-center py-4 min-w-max">
+            <ol className="flex items-center space-x-2 sm:space-x-4">
               {steps.map((step, index) => {
                 const Icon = step.icon
                 const isActive = index === currentStepIndex
@@ -57,24 +57,24 @@ export default function Layout({ children }: LayoutProps) {
                     {index > 0 && (
                       <div 
                         className={cn(
-                          "w-12 h-0.5 mr-4",
+                          "w-6 sm:w-12 h-0.5 mr-2 sm:mr-4",
                           isCompleted ? "bg-primary-500" : "bg-gray-200"
                         )}
                       />
                     )}
                     <div 
                       className={cn(
-                        "flex items-center gap-2 px-3 py-2 rounded-lg transition-colors",
+                        "flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-2 rounded-lg transition-colors",
                         isActive && "bg-primary-50 text-primary-700",
                         isCompleted && "text-primary-600",
                         isDisabled && "text-gray-400"
                       )}
                     >
                       <Icon className={cn(
-                        "h-5 w-5",
+                        "h-4 w-4 sm:h-5 sm:w-5",
                         isActive && "text-primary-600"
                       )} />
-                      <span className="text-sm font-medium hidden sm:inline">
+                      <span className="text-xs sm:text-sm font-medium hidden sm:inline">
                         {step.label}
                       </span>
                     </div>

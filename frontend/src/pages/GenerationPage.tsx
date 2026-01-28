@@ -6,8 +6,22 @@ import { Card, CardHeader, CardBody, CardFooter } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import ProgressBar from '../components/ui/ProgressBar'
 import { useAppStore } from '../store/appStore'
-import { generateNotes, getGenerationStatus, listNotes } from '../lib/api'
+import { generateNotes, getGenerationStatus, listNotes, PromptOptionsPayload } from '../lib/api'
 import { cn } from '../lib/utils'
+
+// Loading messages that rotate during generation
+const LOADING_MESSAGES = [
+  "🧠 Analyzing your documents...",
+  "📚 Extracting key concepts...",
+  "✨ Crafting Cornell-style notes...",
+  "🎯 Organizing main ideas...",
+  "📝 Writing detailed explanations...",
+  "🔍 Adding reference points...",
+  "💡 Creating study questions...",
+  "📊 Structuring content sections...",
+  "🎨 Formatting for clarity...",
+  "⚡ Almost there...",
+]
 
 export default function GenerationPage() {
   const navigate = useNavigate()
@@ -17,7 +31,8 @@ export default function GenerationPage() {
     generationTaskId, 
     setGenerationTaskId,
     setNotes,
-    setCurrentStep 
+    setCurrentStep,
+    promptOptions
   } = useAppStore()
   
   const [status, setStatus] = useState<{
@@ -29,9 +44,21 @@ export default function GenerationPage() {
   } | null>(null)
   const [polling, setPolling] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [loadingMessageIndex, setLoadingMessageIndex] = useState(0)
   
   // Prevent double-call in React StrictMode
   const hasStartedRef = useRef(false)
+
+  // Rotate loading messages
+  useEffect(() => {
+    if (!polling && !starting) return
+    
+    const interval = setInterval(() => {
+      setLoadingMessageIndex((prev) => (prev + 1) % LOADING_MESSAGES.length)
+    }, 3000)
+    
+    return () => clearInterval(interval)
+  }, [polling, starting])
 
   // Start generation on mount if no task
   useEffect(() => {
@@ -86,7 +113,15 @@ export default function GenerationPage() {
 
     setStarting(true)
     try {
-      const result = await generateNotes(sessionId)
+      // Convert store promptOptions to API format
+      const promptPayload: PromptOptionsPayload = {
+        use_default: promptOptions.useDefault,
+        language: promptOptions.language,
+        depth: promptOptions.depth,
+        custom_prompt: promptOptions.customPrompt || undefined,
+      }
+      
+      const result = await generateNotes(sessionId, undefined, promptPayload)
       setGenerationTaskId(result.task_id)
       setPolling(true)
       toast.success('Generation started!')
@@ -161,6 +196,16 @@ export default function GenerationPage() {
         </CardHeader>
 
         <CardBody className="space-y-6">
+          {/* Loading Message */}
+          {(polling || starting) && !isComplete && (
+            <div className="flex items-center justify-center gap-3 p-4 bg-primary-50 rounded-lg border border-primary-200">
+              <Loader2 className="h-5 w-5 text-primary-600 animate-spin" />
+              <span className="text-sm font-medium text-primary-700 animate-pulse">
+                {LOADING_MESSAGES[loadingMessageIndex]}
+              </span>
+            </div>
+          )}
+
           {/* Progress */}
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
