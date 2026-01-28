@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cornell-notes
+  namespace: cornell-notes
+  labels:
+    app: cornell-notes
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cornell-notes
+  template:
+    metadata:
+      labels:
+        app: cornell-notes
+    spec:
+      containers:
+        - name: cornell-notes
+          image: cornell-notes:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: DATABASE_URL
+              value: "sqlite+aiosqlite:///./data/cornell.db"
+            - name: TESSDATA_PREFIX
+              value: "/usr/share/tesseract-ocr/5/tessdata/"
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: cornell-notes-data
