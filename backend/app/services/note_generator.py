@@ -3,7 +3,7 @@ Note generation service - Cornell notes using OpenRouter LLM.
 """
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from openai import AsyncOpenAI
 
 from app.services.note_formatter import note_formatter_service
@@ -53,7 +53,8 @@ class NoteGenerationService:
         source_content: str,
         api_key: str,
         model_name: str = NOTE_GENERATION_MODEL,
-        prompt_options: Optional[Dict[str, Any]] = None
+        prompt_options: Optional[Dict[str, Any]] = None,
+        other_topics: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         """
         Generate Cornell notes for a topic.
@@ -68,6 +69,7 @@ class NoteGenerationService:
                 - language: "en" or "id"
                 - depth: "concise", "balanced", or "indepth"
                 - custom_prompt: str (used when use_default=False)
+            other_topics: List of other topics being generated (for uniqueness)
             
         Returns:
             Generated markdown content
@@ -77,6 +79,11 @@ class NoteGenerationService:
             base_url=OPENROUTER_BASE_URL,
             api_key=api_key,
         )
+        
+        # Build uniqueness context
+        uniqueness_context = ""
+        if other_topics and len(other_topics) > 0:
+            uniqueness_context = self._build_uniqueness_context(other_topics)
         
         # Determine if using default or custom prompt
         use_default = True
@@ -96,6 +103,8 @@ class NoteGenerationService:
 
 {modifier}
 
+{uniqueness_context}
+
 ---
 
 ## Generate Notes for This Topic
@@ -112,6 +121,8 @@ class NoteGenerationService:
             use_formatter = False  # Don't apply formatter for custom prompts
             
             prompt = f"""{custom_prompt}
+
+{uniqueness_context}
 
 ---
 
@@ -163,6 +174,36 @@ class NoteGenerationService:
         if text.endswith("```"):
             text = text[:-3]
         return text.strip()
+    
+    def _build_uniqueness_context(self, other_topics: List[Dict[str, Any]]) -> str:
+        """Build context section to ensure topic uniqueness."""
+        if not other_topics:
+            return ""
+        
+        lines = [
+            "## IMPORTANT: Topic Uniqueness Requirement",
+            "",
+            "This note is part of a set. Other notes in this set cover the following topics.",
+            "**DO NOT repeat or overlap with these topics. Focus ONLY on your assigned topic.**",
+            ""
+        ]
+        
+        for i, topic in enumerate(other_topics, 1):
+            title = topic.get("title", "Unknown")
+            keywords = topic.get("keywords", [])
+            summary = topic.get("summary", "")
+            
+            lines.append(f"### Other Note {i}: {title}")
+            if keywords:
+                lines.append(f"- Keywords: {', '.join(keywords[:5])}")
+            if summary:
+                lines.append(f"- Covers: {summary[:200]}")
+            lines.append("")
+        
+        lines.append("**Your note must NOT include content that belongs to the above topics.**")
+        lines.append("")
+        
+        return "\n".join(lines)
 
 
 # Singleton instance

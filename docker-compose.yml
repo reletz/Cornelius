@@ -11,8 +11,6 @@ services:
       - ./cornell_data:/app/data
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///./data/cornell.db
-      # Optional: Pre-fill key if running in a trusted private environment
-      # - GEMINI_API_KEY=your_key_here
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

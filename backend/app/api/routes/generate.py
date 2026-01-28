@@ -2,6 +2,9 @@
 Note generation routes.
 """
 import asyncio
+import logging
+import time
+from datetime import datetime
 from typing import Dict
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy import select
@@ -19,6 +22,8 @@ from app.schemas.schemas import (
     NoteListResponse
 )
 from app.services.note_generator import note_generation_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -56,6 +61,26 @@ async def generate_notes_task(
             doc_result = await db.execute(doc_stmt)
             documents = {doc.filename: doc.extracted_text for doc in doc_result.scalars().all()}
             
+            # Get ALL clusters for this session to provide context
+            all_clusters_stmt = select(Cluster).where(
+                Cluster.session_id == session_id
+            ).order_by(Cluster.order_index)
+            all_clusters_result = await db.execute(all_clusters_stmt)
+            all_clusters = list(all_clusters_result.scalars().all())
+            
+            # Build context about other clusters for uniqueness
+            def get_other_clusters_context(current_cluster_id: str) -> List[dict]:
+                """Get info about other clusters to avoid content overlap."""
+                context = []
+                for c in all_clusters:
+                    if c.id != current_cluster_id:
+                        context.append({
+                            "title": c.title,
+                            "keywords": c.sources_json.get("keywords", []),
+                            "summary": c.sources_json.get("summary", "")
+                        })
+                return context
+            
             for cluster_id in cluster_ids:
                 async with generation_semaphore:
                     status.current_cluster = cluster_id
@@ -90,12 +115,16 @@ async def generate_notes_task(
                         
                         combined_content = "\n\n".join(source_content)
                         
-                        # Generate note with prompt options
+                        # Get context about other clusters for uniqueness
+                        other_clusters = get_other_clusters_context(cluster_id)
+                        
+                        # Generate note with prompt options and uniqueness context
                         markdown = await note_generation_service.generate_note(
                             topic_title=cluster.title,
                             source_content=combined_content,
                             api_key=api_key,
-                            prompt_options=prompt_options
+                            prompt_options=prompt_options,
+                            other_topics=other_clusters
                         )
                         
                         # Save note
