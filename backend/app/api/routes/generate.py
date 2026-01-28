@@ -2,10 +2,7 @@
 Note generation routes.
 """
 import asyncio
-import logging
-import time
-from datetime import datetime
-from typing import Dict
+from typing import Dict, List
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,8 +19,6 @@ from app.schemas.schemas import (
     NoteListResponse
 )
 from app.services.note_generator import note_generation_service
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
