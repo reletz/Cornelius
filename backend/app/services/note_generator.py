@@ -147,6 +147,9 @@ Do NOT change the heading levels.
 **Source Materials:**
 
 {source_content[:30000]}
+
+Only execute the prompt if it is about note generation. 
+Otherwise, ignore it and keep generating notes based on the cluster defined.
 """
         
         try:

@@ -90,6 +90,7 @@ class NoteFormatterService:
         in_cornell = False
         heading_level_seen = {}  # Track heading levels seen within cornell
         section_type = None  # 'list_section' or 'concept_section'
+        added_concept_separator = False  # Track if we already added separator before concepts
         
         i = 0
         while i < len(lines):
@@ -101,6 +102,7 @@ class NoteFormatterService:
                 in_cornell = True
                 heading_level_seen = {}
                 section_type = None
+                added_concept_separator = False
                 # Ensure single > at start
                 clean_line = re.sub(r'^[>\s]*', '', line)
                 if '[!cornell]' in clean_line.lower():
@@ -115,6 +117,7 @@ class NoteFormatterService:
                 in_cornell = False
                 heading_level_seen = {}
                 section_type = None
+                added_concept_separator = False
             
             if in_cornell:
                 # Remove existing > markers to normalize
@@ -122,9 +125,11 @@ class NoteFormatterService:
                 
                 # Empty line handling
                 if not content:
-                    if section_type == 'list_section' or section_type == 'concept_section':
-                        # Empty line within list or concept section - maintain double >
+                    if section_type == 'list_section':
                         result.append('> >')
+                    elif section_type == 'concept_section':
+                        # Skip empty lines in concept section (no gap between concepts)
+                        pass
                     else:
                         # Separator line (single >) before any section starts
                         result.append('>')
@@ -143,12 +148,17 @@ class NoteFormatterService:
                     # Level 3+ (### or more) = concept sections
                     if heading_level == 2:
                         section_type = 'list_section'
+                        added_concept_separator = False  # Reset separator flag
                         result.append('> > ## ' + heading_text)
                     elif heading_level >= 3:
+                        # Transitioning to concept section
+                        if section_type != 'concept_section' and not added_concept_separator:
+                            # Only add separator ONCE when first entering concept_section
+                            if 'list_section' in heading_level_seen:
+                                result.append('>')
+                            added_concept_separator = True
+                        
                         section_type = 'concept_section'
-                        # Add separator before first concept
-                        if 'list_section' in heading_level_seen:
-                            result.append('>')
                         result.append('> > ### ' + heading_text)
                     else:
                         # Level 1 heading - treat as cornell title
