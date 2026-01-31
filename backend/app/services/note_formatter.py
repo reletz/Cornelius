@@ -64,25 +64,32 @@ class NoteFormatterService:
     
     def _fix_cornell_structure(self, text: str) -> str:
         """
-        Fix cornell callout structure.
+        Fix cornell callout structure using structure-based detection.
+        
+        More robust approach: detect sections by heading level and context,
+        not by exact keyword matching. This works regardless of language
+        or how AI names the sections.
         
         Expected format:
         > [!cornell] Title
         >
-        > > ## Questions/Cues
+        > > ## [Any heading - treated as Questions/Cues section]
         > > - content
         > >
-        > > ## Reference Points
+        > > ## [Any heading - treated as Reference Points section]
         > > - content
         >
-        > > ### Major Concept 1
+        > > ### [Any heading - treated as Major Concepts]
+        > > content
+        > >
+        > > ### [Any heading - treated as Major Concepts]
         > > content
         """
         lines = text.split('\n')
         result = []
         in_cornell = False
-        in_questions_refs = False  # True when in Questions/Cues or Reference Points
-        after_refs = False  # True after we've passed Reference Points
+        heading_level_seen = {}  # Track heading levels seen within cornell
+        section_type = None  # 'list_section' or 'concept_section'
         
         i = 0
         while i < len(lines):
@@ -92,8 +99,8 @@ class NoteFormatterService:
             # Detect start of cornell callout
             if '[!cornell]' in stripped.lower():
                 in_cornell = True
-                in_questions_refs = False
-                after_refs = False
+                heading_level_seen = {}
+                section_type = None
                 # Ensure single > at start
                 clean_line = re.sub(r'^[>\s]*', '', line)
                 if '[!cornell]' in clean_line.lower():
@@ -106,8 +113,8 @@ class NoteFormatterService:
             # Detect end of cornell (start of summary or ad-libitum)
             if in_cornell and ('[!summary]' in stripped.lower() or '[!ad-libitum]' in stripped.lower()):
                 in_cornell = False
-                in_questions_refs = False
-                after_refs = False
+                heading_level_seen = {}
+                section_type = None
             
             if in_cornell:
                 # Remove existing > markers to normalize
@@ -115,47 +122,45 @@ class NoteFormatterService:
                 
                 # Empty line handling
                 if not content:
-                    if in_questions_refs and not after_refs:
-                        # Empty line within questions/refs section
+                    if section_type == 'list_section' or section_type == 'concept_section':
+                        # Empty line within list or concept section - maintain double >
                         result.append('> >')
-                    elif after_refs:
-                        # Don't add extra empty lines in concept section
-                        pass
                     else:
-                        # Separator line (single >)
+                        # Separator line (single >) before any section starts
                         result.append('>')
                     i += 1
                     continue
                 
-                # Detect Questions/Cues or Reference Points headers
-                if re.match(r'^#{1,2}\s*(questions?|cues?|reference\s*points?)', content, re.IGNORECASE):
-                    in_questions_refs = True
-                    after_refs = False
-                    result.append('> > ## ' + re.sub(r'^#+\s*', '', content))
-                    i += 1
-                    continue
-                
-                # Detect end of Reference Points (next major heading)
-                if in_questions_refs and re.match(r'^#{2,3}\s+(?!questions?|cues?|reference)', content, re.IGNORECASE):
-                    # This is a major concept heading - transition
-                    in_questions_refs = False
-                    after_refs = True
-                    # Add separator before concepts
-                    result.append('>')
-                    result.append('> > ### ' + re.sub(r'^#+\s*', '', content))
-                    i += 1
-                    continue
-                
-                # Detect major concept headings (### or ####)
-                if re.match(r'^#{2,4}\s+', content):
-                    heading_content = re.sub(r'^#+\s*', '', content)
-                    result.append('> > ### ' + heading_content)
+                # Detect headings
+                heading_match = re.match(r'^(#+)\s+(.+)$', content)
+                if heading_match:
+                    heading_markers = heading_match.group(1)
+                    heading_text = heading_match.group(2)
+                    heading_level = len(heading_markers)
+                    
+                    # Determine section type based on heading level
+                    # Level 2 (##) = list sections (Questions/Cues, Reference Points, etc)
+                    # Level 3+ (### or more) = concept sections
+                    if heading_level == 2:
+                        section_type = 'list_section'
+                        result.append('> > ## ' + heading_text)
+                    elif heading_level >= 3:
+                        section_type = 'concept_section'
+                        # Add separator before first concept
+                        if 'list_section' in heading_level_seen:
+                            result.append('>')
+                        result.append('> > ### ' + heading_text)
+                    else:
+                        # Level 1 heading - treat as cornell title
+                        result.append('> ' + line)
+                    
+                    heading_level_seen[section_type or 'other'] = True
                     i += 1
                     continue
                 
                 # Regular content
-                if in_questions_refs or after_refs:
-                    # Double > for content in questions/refs and concepts
+                if section_type == 'list_section' or section_type == 'concept_section':
+                    # Double > for content in list and concept sections
                     result.append('> > ' + content)
                 else:
                     # Single > for other cornell content
@@ -287,6 +292,9 @@ class NoteFormatterService:
         """
         Validate the note format and return issues found.
         
+        More lenient validation - focuses on critical structure,
+        not exact naming of sections (which may be translated).
+        
         Returns:
             Tuple of (is_valid, list of issues)
         """
@@ -300,13 +308,25 @@ class NoteFormatterService:
         if re.search(r'\[\[!ad-libitum\]\]', markdown, re.IGNORECASE):
             issues.append("Found [[!ad-libitum]] instead of [!ad-libitum]")
         
-        # Check for missing sections
+        # Check for required sections (but don't validate their names)
         if not re.search(r'\[!cornell\]', markdown, re.IGNORECASE):
             issues.append("Missing [!cornell] section")
         if not re.search(r'\[!summary\]', markdown, re.IGNORECASE):
             issues.append("Missing [!summary] section")
         if not re.search(r'\[!ad-libitum\]', markdown, re.IGNORECASE):
             issues.append("Missing [!ad-libitum] section")
+        
+        # Check that cornell section has some structure (at least one heading)
+        cornell_section = re.search(
+            r'\[!cornell\].*?(?=\[!summary\]|\[!ad-libitum\]|$)',
+            markdown,
+            re.IGNORECASE | re.DOTALL
+        )
+        if cornell_section:
+            cornell_text = cornell_section.group(0)
+            # Should have at least one ## or ### heading
+            if not re.search(r'^>+\s*#{2,}', cornell_text, re.MULTILINE):
+                issues.append("Cornell section should have subsections (## or ### headings)")
         
         return len(issues) == 0, issues
 

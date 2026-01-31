@@ -119,6 +119,15 @@ class NoteGenerationService:
 **Source Materials:**
 
 {source_content[:30000]}
+
+
+IMPORTANT: Always use these exact section headers in the Cornell section:
+- "## Questions/Cues"
+- "## Reference Points"
+- "### [Concept Name]"
+
+Do NOT translate these section headers. Keep them in English.
+Do NOT change the heading levels.
 """
         else:
             # Use custom prompt
