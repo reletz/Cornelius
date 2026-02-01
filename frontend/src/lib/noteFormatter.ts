@@ -189,7 +189,8 @@ function fixAllStructures(text: string): string {
       }
       
       // Regular text
-      if (lastLineType === 'heading' || lastLineType === 'list') {
+      if (lastLineType === 'heading' || lastLineType === 'list' || lastLineType === 'text') {
+        // Add spacer between paragraphs, after heading, or after list
         result.push('> >');
       }
       result.push('> > ' + content);
@@ -207,8 +208,13 @@ function fixAllStructures(text: string): string {
       if (lastLineType === 'callout' || lastLineType === 'heading') {
         result.push('>');
       } else if (lastLineType === 'list' && !isList) {
+        // List to text: spacer
         result.push('>');
       } else if (lastLineType === 'text' && isList) {
+        // Text to list: spacer
+        result.push('>');
+      } else if (lastLineType === 'text' && !isList) {
+        // Text to text (new paragraph): spacer
         result.push('>');
       }
       // List to list: no spacer
