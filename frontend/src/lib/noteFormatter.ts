@@ -53,14 +53,25 @@ function fixCalloutSyntax(text: string): string {
 
 /**
  * Fix cornell callout structure using structure-based detection.
+ * 
+ * Format rules:
+ * 1. After [!cornell] callout: single > spacer
+ * 2. ## sections (Questions/Cues, Reference): > > prefix, with > > spacer between blocks
+ * 3. After ## sections, before ### concepts: single > spacer
+ * 4. ### concepts and content: > > prefix
+ * 5. Spacing within content:
+ *    - Text after heading → > > spacer
+ *    - List after heading → > > spacer  
+ *    - Text after list → > > spacer
+ *    - List after text → > > spacer
+ *    - List item to list item → NO spacer
  */
 function fixCornellStructure(text: string): string {
   const lines = text.split('\n');
   const result: string[] = [];
   let inCornell = false;
-  const headingLevelSeen: Record<string, boolean> = {};
-  let sectionType: 'list_section' | 'concept_section' | null = null;
-  let addedConceptSeparator = false;
+  let sectionType: 'none' | 'list_section' | 'concept_section' = 'none';
+  let lastLineType: 'callout' | 'heading' | 'list' | 'text' = 'callout';
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -69,17 +80,12 @@ function fixCornellStructure(text: string): string {
     // Detect start of cornell callout
     if (stripped.toLowerCase().includes('[!cornell]')) {
       inCornell = true;
-      Object.keys(headingLevelSeen).forEach(k => delete headingLevelSeen[k]);
-      sectionType = null;
-      addedConceptSeparator = false;
+      sectionType = 'none';
+      lastLineType = 'callout';
       
       // Ensure single > at start
-      const cleanLine = line.replace(/^[>\s]*/, '');
-      if (cleanLine.toLowerCase().includes('[!cornell]')) {
-        result.push('> ' + cleanLine);
-      } else {
-        result.push(line);
-      }
+      const cleanLine = stripped.replace(/^[>\s]*/, '');
+      result.push('> ' + cleanLine);
       continue;
     }
     
@@ -89,66 +95,81 @@ function fixCornellStructure(text: string): string {
       stripped.toLowerCase().includes('[!ad-libitum]')
     )) {
       inCornell = false;
-      Object.keys(headingLevelSeen).forEach(k => delete headingLevelSeen[k]);
-      sectionType = null;
-      addedConceptSeparator = false;
+      sectionType = 'none';
+      lastLineType = 'callout';
     }
     
     if (inCornell) {
       // Remove existing > markers to normalize
       const content = line.replace(/^[>\s]+/, '').trim();
       
-      // Empty line handling
+      // Skip empty lines - we'll add spacing ourselves
       if (!content) {
-        if (sectionType === 'list_section') {
-          result.push('> >');
-        } else if (sectionType === 'concept_section') {
-          // Skip empty lines in concept section
-        } else {
-          // Separator line (single >) before any section starts
-          result.push('>');
-        }
         continue;
       }
       
-      // Detect headings
+      // Detect content type
       const headingMatch = content.match(/^(#+)\s+(.+)$/);
+      const isList = /^[-*]\s+/.test(content) || /^\d+\.\s+/.test(content);
+      
       if (headingMatch) {
-        const headingMarkers = headingMatch[1];
+        const headingLevel = headingMatch[1].length;
         const headingText = headingMatch[2];
-        const headingLevel = headingMarkers.length;
         
-        // Determine section type based on heading level
         if (headingLevel === 2) {
+          // ## heading (Questions/Cues, Reference Points)
+          // Add spacer before if not first item after callout
+          if (lastLineType === 'callout') {
+            // Single > spacer after callout
+            result.push('>');
+          } else if (lastLineType === 'heading' || lastLineType === 'list' || lastLineType === 'text') {
+            result.push('> >');
+          }
+          
           sectionType = 'list_section';
-          addedConceptSeparator = false;
           result.push('> > ## ' + headingText);
+          lastLineType = 'heading';
         } else if (headingLevel >= 3) {
-          // Transitioning to concept section
-          if (sectionType !== 'concept_section' && !addedConceptSeparator) {
-            if (headingLevelSeen['list_section']) {
-              result.push('>');
-            }
-            addedConceptSeparator = true;
+          // ### heading (concepts)
+          // Transition from list_section to concept_section needs single > spacer
+          if (sectionType === 'list_section') {
+            result.push('>');
+            sectionType = 'concept_section';
+          } else if (lastLineType === 'callout') {
+            // No list section, single > after callout
+            result.push('>');
+          } else if (lastLineType === 'heading' || lastLineType === 'list' || lastLineType === 'text') {
+            // Add > > spacer before heading in concept section
+            result.push('> >');
           }
           
           sectionType = 'concept_section';
           result.push('> > ### ' + headingText);
-        } else {
-          // Level 1 heading - treat as cornell title
-          result.push('> ' + line);
+          lastLineType = 'heading';
         }
-        
-        headingLevelSeen[sectionType || 'other'] = true;
         continue;
       }
       
-      // Regular content
-      if (sectionType === 'list_section' || sectionType === 'concept_section') {
+      // List items
+      if (isList) {
+        // Add spacer before list if coming from text or heading
+        if (lastLineType === 'text' || lastLineType === 'heading') {
+          result.push('> >');
+        }
+        
         result.push('> > ' + content);
-      } else {
-        result.push('> ' + content);
+        lastLineType = 'list';
+        continue;
       }
+      
+      // Regular text
+      // Add spacer before text if coming from heading or list
+      if (lastLineType === 'heading' || lastLineType === 'list') {
+        result.push('> >');
+      }
+      
+      result.push('> > ' + content);
+      lastLineType = 'text';
     } else {
       result.push(line);
     }
