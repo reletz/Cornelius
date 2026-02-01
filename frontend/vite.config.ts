@@ -10,14 +10,12 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  // Raw imports work out of the box with ?raw suffix
+  // No additional config needed for .md files
+  assetsInclude: ['**/*.md'],
   server: {
     port: 3000,
-    proxy: {
-      '/api': {
-        target: process.env.VITE_API_URL || 'http://localhost:8000',
-        changeOrigin: true,
-      },
-    },
+    // Proxy removed - no backend needed for client-side architecture
   },
   build: {
     outDir: 'dist',
