@@ -151,11 +151,8 @@ async function extractPdf(
 ): Promise<string> {
   const pdfjsLib = await import('pdfjs-dist');
   
-  // Set worker path
-  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-    'pdfjs-dist/build/pdf.worker.min.mjs',
-    import.meta.url
-  ).toString();
+  // Set worker from unpkg CDN (more reliable for production)
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
   
   onProgress?.(10, 'Loading PDF...');
   
@@ -194,11 +191,8 @@ async function ocrPdf(
   const pdfjsLib = await import('pdfjs-dist');
   const { createWorker } = await import('tesseract.js');
   
-  // Set worker path
-  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-    'pdfjs-dist/build/pdf.worker.min.mjs',
-    import.meta.url
-  ).toString();
+  // Set worker from unpkg CDN (more reliable for production)
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
   
   onProgress?.(10, 'Loading PDF for OCR...');
   
