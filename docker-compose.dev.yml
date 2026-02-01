@@ -1,39 +1,13 @@
-version: '3.8'
-
-# Development docker-compose with hot reloading
-
 services:
-  # Backend development server
-  backend:
+  cornell-notes-dev:
     build:
       context: .
       dockerfile: Dockerfile.dev
-    container_name: cornell-notes-backend-dev
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./backend:/app
-      - ./cornell_data:/app/data
-    environment:
-      - DATABASE_URL=sqlite+aiosqlite:///./data/cornell.db
-      - DEBUG=true
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    restart: unless-stopped
-
-  # Frontend development server (Vite)
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.dev
-    container_name: cornell-notes-frontend-dev
     ports:
       - "3000:3000"
     volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      - ./frontend/src:/app/src:ro
+      - ./frontend/public:/app/public:ro
+      - ./frontend/index.html:/app/index.html:ro
     environment:
-      - VITE_API_URL=http://backend:8000
-    command: npm run dev -- --host 0.0.0.0
-    restart: unless-stopped
-    depends_on:
-      - backend
+      - CHOKIDAR_USEPOLLING=true

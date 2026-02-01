@@ -1,12 +1,13 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
-import { FileText, Download, Github, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react'
+import { FileText, Download, ChevronLeft, ChevronRight, RotateCcw, FileDown, Package } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { Card, CardHeader, CardBody, CardFooter } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import { useAppStore } from '../store/appStore'
-import { listNotes, exportMarkdown, exportPdf } from '../lib/api'
+import { getNotes } from '../lib/db'
+import { generatePdf, downloadMarkdown, downloadMarkdownZip } from '../lib/pdfGenerator'
 import { cn } from '../lib/utils'
 
 export default function ReviewPage() {
@@ -15,6 +16,7 @@ export default function ReviewPage() {
   
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [exporting, setExporting] = useState<'pdf' | 'md' | 'zip' | null>(null)
   
   // Prevent double-call in React StrictMode
   const hasFetchedRef = useRef(false)
@@ -24,8 +26,14 @@ export default function ReviewPage() {
 
     const fetchNotes = async () => {
       try {
-        const result = await listNotes(sessionId)
-        setNotes(result.notes)
+        const result = await getNotes(sessionId)
+        setNotes(result.map(n => ({
+          id: n.id,
+          clusterId: n.clusterId,
+          markdownContent: n.content,
+          status: 'generated' as const,
+          createdAt: n.createdAt,
+        })))
       } catch (err) {
         toast.error('Failed to load notes')
       } finally {
@@ -44,14 +52,56 @@ export default function ReviewPage() {
   const currentNote = notes[selectedIndex]
   const currentCluster = clusters.find(c => c.id === currentNote?.clusterId)
 
-  const handleDownloadMarkdown = () => {
-    if (!sessionId) return
-    window.open(exportMarkdown(sessionId), '_blank')
+  const handleDownloadMarkdown = async () => {
+    if (!currentNote) return
+    
+    setExporting('md')
+    try {
+      const filename = currentCluster?.title || `note-${selectedIndex + 1}`
+      downloadMarkdown(currentNote.markdownContent, filename)
+      toast.success('Markdown downloaded!')
+    } catch (err) {
+      toast.error('Failed to download markdown')
+    } finally {
+      setExporting(null)
+    }
   }
 
-  const handleDownloadPdf = () => {
-    if (!sessionId) return
-    window.open(exportPdf(sessionId), '_blank')
+  const handleDownloadAllMarkdown = async () => {
+    if (notes.length === 0) return
+    
+    setExporting('zip')
+    try {
+      const noteFiles = notes.map((note, index) => {
+        const cluster = clusters.find(c => c.id === note.clusterId)
+        return {
+          filename: cluster?.title || `note-${index + 1}`,
+          content: note.markdownContent,
+        }
+      })
+      
+      await downloadMarkdownZip(noteFiles, 'cornell-notes')
+      toast.success('All notes downloaded!')
+    } catch (err) {
+      toast.error('Failed to download notes')
+    } finally {
+      setExporting(null)
+    }
+  }
+
+  const handleDownloadPdf = async () => {
+    if (!currentNote) return
+    
+    setExporting('pdf')
+    try {
+      const filename = currentCluster?.title || `note-${selectedIndex + 1}`
+      await generatePdf(currentNote.markdownContent, filename)
+      toast.success('PDF downloaded!')
+    } catch (err) {
+      toast.error('Failed to generate PDF')
+    } finally {
+      setExporting(null)
+    }
   }
 
   const handleStartOver = () => {
@@ -76,7 +126,7 @@ export default function ReviewPage() {
   return (
     <div className="max-w-5xl mx-auto">
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 lg:gap-6">
-        {/* Note list sidebar - collapsible on mobile */}
+        {/* Note list sidebar */}
         <div className="lg:col-span-1 order-2 lg:order-1">
           <Card>
             <CardHeader>
@@ -117,25 +167,47 @@ export default function ReviewPage() {
                 variant="secondary" 
                 className="w-full justify-start"
                 onClick={handleDownloadMarkdown}
+                loading={exporting === 'md'}
+                disabled={!currentNote || exporting !== null}
               >
                 <Download className="mr-2 h-4 w-4" />
-                {notes.length === 1 ? 'Download Markdown' : 'Download Markdown (ZIP)'}
+                Download Current (MD)
               </Button>
+              
+              <Button 
+                variant="secondary" 
+                className="w-full justify-start"
+                onClick={handleDownloadAllMarkdown}
+                loading={exporting === 'zip'}
+                disabled={notes.length === 0 || exporting !== null}
+              >
+                <Package className="mr-2 h-4 w-4" />
+                Download All (ZIP)
+              </Button>
+              
               <Button 
                 variant="secondary" 
                 className="w-full justify-start"
                 onClick={handleDownloadPdf}
+                loading={exporting === 'pdf'}
+                disabled={!currentNote || exporting !== null}
               >
-                <FileText className="mr-2 h-4 w-4" />
-                Download PDF
+                <FileDown className="mr-2 h-4 w-4" />
+                Download Current (PDF)
               </Button>
+            </CardBody>
+          </Card>
+
+          {/* Actions */}
+          <Card className="mt-4">
+            <CardBody>
               <Button 
-                variant="secondary" 
-                className="w-full justify-start"
-                disabled
+                variant="ghost" 
+                className="w-full justify-start text-gray-600"
+                onClick={handleStartOver}
               >
-                <Github className="mr-2 h-4 w-4" />
-                Sync to GitHub
+                <RotateCcw className="mr-2 h-4 w-4" />
+                Start Over
               </Button>
             </CardBody>
           </Card>
@@ -170,6 +242,9 @@ export default function ReviewPage() {
                   >
                     <ChevronLeft className="h-4 w-4" />
                   </Button>
+                  <span className="text-sm text-gray-500">
+                    {selectedIndex + 1} / {notes.length}
+                  </span>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -184,7 +259,7 @@ export default function ReviewPage() {
 
             <CardBody className="max-h-[600px] overflow-y-auto">
               {currentNote ? (
-                <div className="markdown-preview">
+                <div className="markdown-preview prose prose-sm max-w-none">
                   <ReactMarkdown>
                     {currentNote.markdownContent}
                   </ReactMarkdown>
@@ -203,13 +278,16 @@ export default function ReviewPage() {
               >
                 Back
               </Button>
-              <Button 
-                variant="secondary"
-                onClick={handleStartOver}
-              >
-                <RotateCcw className="mr-2 h-4 w-4" />
-                Start Over
-              </Button>
+              <div className="flex gap-2">
+                <Button 
+                  variant="secondary"
+                  onClick={handleDownloadMarkdown}
+                  disabled={!currentNote || exporting !== null}
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  Download
+                </Button>
+              </div>
             </CardFooter>
           </Card>
         </div>

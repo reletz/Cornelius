@@ -1,42 +1,33 @@
-# Same as .gitignore plus build context exclusions
+# Node
 node_modules/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
 dist/
-build/
-*.egg-info/
-.eggs/
+.npm/
+
+# Git
+.git/
+.gitignore
+
+# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
+
+# OS
 .DS_Store
 Thumbs.db
+
+# Env files
 .env
 .env.local
 .env.*.local
-cornell_data/
-data/
-*.db
-*.sqlite
-*.sqlite3
-uploads/
-*.log
-logs/
-.coverage
-htmlcov/
-.pytest_cache/
-.tox/
-*.bak
-*.tmp
-.cache/
-.git/
+
+# Docs
 *.md
-!README.md
+LICENSE
+SPEC.md
+
+# K8s and other configs
+k8s/
+cornell_data/

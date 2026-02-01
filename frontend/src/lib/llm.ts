@@ -2,7 +2,8 @@
  * LLM Service - Direct browser calls to OpenRouter/OpenAI compatible APIs
  */
 import OpenAI from 'openai';
-import { db, getSettings } from './db';
+import { getSettings } from './db';
+import { formatNote, validateFormat } from './noteFormatter';
 
 // Import prompts as raw strings
 import basePrompt from '../prompts/note-gen.md?raw';
@@ -68,6 +69,9 @@ export async function getLLMClient(): Promise<OpenAI> {
   return clientInstance;
 }
 
+// Model used for API key validation (free, fast)
+const VALIDATION_MODEL = 'google/gemma-3n-e2b-it:free';
+
 /**
  * Reset client (call when settings change)
  */
@@ -78,23 +82,34 @@ export function resetLLMClient(): void {
 }
 
 /**
- * Validate API key by making a simple request
+ * Validate API key by making a simple request with a free model
  */
-export async function validateApiKey(apiKey: string, baseUrl: string): Promise<boolean> {
+export async function validateApiKey(apiKey: string, baseUrl: string): Promise<{ valid: boolean; message: string }> {
   try {
     const client = new OpenAI({
       apiKey,
       baseURL: baseUrl,
       dangerouslyAllowBrowser: true,
-      timeout: 10000,
+      timeout: 15000,
     });
 
-    // Try to list models (lightweight check)
-    await client.models.list();
-    return true;
+    // Quick validation with free model (same as backend)
+    await client.chat.completions.create({
+      model: VALIDATION_MODEL,
+      messages: [{ role: 'user', content: "Say 'OK' if you can read this." }],
+      max_tokens: 10,
+    });
+
+    return {
+      valid: true,
+      message: 'API key is valid and working',
+    };
   } catch (error) {
     console.error('API key validation failed:', error);
-    return false;
+    return {
+      valid: false,
+      message: `Invalid API key: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    };
   }
 }
 
@@ -108,6 +123,7 @@ export interface GenerateNotesOptions {
   customPrompt?: string;
   otherTopics?: TopicContext[];
   onChunk?: (chunk: string) => void;
+  useFormatter?: boolean; // Apply note formatter (default: true for default prompts)
 }
 
 export interface TopicContext {
@@ -131,6 +147,7 @@ export async function generateCornellNotes(options: GenerateNotesOptions): Promi
     customPrompt,
     otherTopics,
     onChunk,
+    useFormatter = !customPrompt, // Default: use formatter for default prompts
   } = options;
 
   const client = await getLLMClient();
@@ -211,7 +228,19 @@ Do NOT change the heading levels.
         onChunk(text);
       }
 
-      return cleanResponse(result);
+      const cleaned = cleanResponse(result);
+      
+      // Apply formatter for default prompts
+      if (useFormatter) {
+        const formatted = formatNote(cleaned);
+        const { valid, issues } = validateFormat(formatted);
+        if (!valid) {
+          console.warn(`Format issues in '${topicTitle}':`, issues);
+        }
+        return formatted;
+      }
+      
+      return cleaned;
     } else {
       // Non-streaming mode
       const response = await client.chat.completions.create({
@@ -227,7 +256,19 @@ Do NOT change the heading levels.
         throw new Error('Response too short or empty');
       }
 
-      return cleanResponse(content);
+      const cleaned = cleanResponse(content);
+      
+      // Apply formatter for default prompts
+      if (useFormatter) {
+        const formatted = formatNote(cleaned);
+        const { valid, issues } = validateFormat(formatted);
+        if (!valid) {
+          console.warn(`Format issues in '${topicTitle}':`, issues);
+        }
+        return formatted;
+      }
+      
+      return cleaned;
     }
   } catch (error) {
     console.error(`Note generation failed for '${topicTitle}':`, error);

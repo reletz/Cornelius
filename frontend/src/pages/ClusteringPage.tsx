@@ -6,8 +6,9 @@ import { Card, CardHeader, CardBody, CardFooter } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import PromptOptionsPanel from '../components/PromptOptionsPanel'
-import { useAppStore } from '../store/appStore'
-import { analyzeAndCluster, listClusters, updateCluster, deleteCluster, mergeClusters } from '../lib/api'
+import { useAppStore, Cluster } from '../store/appStore'
+import { getDocuments, addCluster, updateCluster as dbUpdateCluster, deleteCluster as dbDeleteCluster } from '../lib/db'
+import { analyzeAndCluster, ClusterResult } from '../lib/clustering'
 import { cn } from '../lib/utils'
 
 // Loading messages for clustering
@@ -63,18 +64,53 @@ export default function ClusteringPage() {
     setAnalyzing(true)
     
     try {
-      const result = await analyzeAndCluster(sessionId)
-      setClusters(result.clusters)
-      toast.success(`Identified ${result.total} topic clusters`)
+      // Get documents from IndexedDB
+      const docs = await getDocuments(sessionId)
+      
+      if (docs.length === 0) {
+        toast.error('No documents found. Please upload some files first.')
+        navigate('/upload')
+        return
+      }
+
+      // Analyze using LLM
+      const result = await analyzeAndCluster(docs)
+      
+      // Save clusters to IndexedDB and update store
+      const savedClusters: Cluster[] = []
+      
+      for (let i = 0; i < result.clusters.length; i++) {
+        const c = result.clusters[i]
+        const saved = await addCluster(sessionId, c.title, {
+          keywords: c.keywords,
+          sourceMapping: c.sourceMapping,
+          summary: c.summary,
+          estimatedWordCount: c.estimatedWordCount,
+          uniqueConcepts: c.uniqueConcepts,
+        }, i)
+        
+        savedClusters.push({
+          id: saved.id,
+          sessionId: saved.sessionId,
+          title: saved.title,
+          sourcesJson: saved.sourcesJson,
+          orderIndex: saved.orderIndex,
+          createdAt: saved.createdAt,
+        })
+      }
+      
+      setClusters(savedClusters)
+      toast.success(`Identified ${result.clusters.length} topic clusters`)
     } catch (err) {
-      toast.error('Failed to analyze documents')
+      console.error('Clustering failed:', err)
+      toast.error('Failed to analyze documents. Please check your API key.')
       hasAnalyzedRef.current = false // Allow retry on error
     } finally {
       setAnalyzing(false)
     }
   }
 
-  const handleEdit = (cluster: typeof clusters[0]) => {
+  const handleEdit = (cluster: Cluster) => {
     setEditingId(cluster.id)
     setEditTitle(cluster.title)
   }
@@ -85,7 +121,7 @@ export default function ClusteringPage() {
     setLoading(true)
     
     try {
-      await updateCluster(editingId, { title: editTitle.trim() })
+      await dbUpdateCluster(editingId, { title: editTitle.trim() })
       updateClusterStore(editingId, { title: editTitle.trim() })
       setEditingId(null)
       toast.success('Cluster updated')
@@ -102,7 +138,7 @@ export default function ClusteringPage() {
     setLoading(true)
     
     try {
-      await deleteCluster(clusterId)
+      await dbDeleteCluster(clusterId)
       removeCluster(clusterId)
       toast.success('Cluster deleted')
     } catch (err) {
@@ -132,12 +168,48 @@ export default function ClusteringPage() {
     setMerging(true)
     
     try {
-      await mergeClusters(selectedClusters, newTitle.trim())
+      // Get clusters to merge
+      const clustersToMerge = clusters.filter(c => selectedClusters.includes(c.id))
       
-      // Refresh clusters
+      // Create merged cluster data
+      const mergedData: ClusterResult = {
+        id: crypto.randomUUID(),
+        title: newTitle.trim(),
+        keywords: [...new Set(clustersToMerge.flatMap(c => c.sourcesJson.keywords || []))],
+        sourceMapping: clustersToMerge.flatMap(c => c.sourcesJson.sourceMapping || []),
+        summary: clustersToMerge.map(c => c.sourcesJson.summary).join(' | '),
+        estimatedWordCount: clustersToMerge.reduce((sum, c) => sum + (c.sourcesJson.estimatedWordCount || 0), 0),
+        uniqueConcepts: [...new Set(clustersToMerge.flatMap(c => c.sourcesJson.uniqueConcepts || []))],
+      }
+      
+      // Delete old clusters
+      for (const id of selectedClusters) {
+        await dbDeleteCluster(id)
+      }
+      
+      // Add merged cluster
       if (sessionId) {
-        const updated = await listClusters(sessionId)
-        setClusters(updated.clusters)
+        const saved = await addCluster(sessionId, mergedData.title, {
+          keywords: mergedData.keywords,
+          sourceMapping: mergedData.sourceMapping,
+          summary: mergedData.summary,
+          estimatedWordCount: mergedData.estimatedWordCount,
+          uniqueConcepts: mergedData.uniqueConcepts,
+        }, 0)
+        
+        // Update store
+        const remainingClusters = clusters.filter(c => !selectedClusters.includes(c.id))
+        setClusters([
+          {
+            id: saved.id,
+            sessionId: saved.sessionId,
+            title: saved.title,
+            sourcesJson: saved.sourcesJson,
+            orderIndex: 0,
+            createdAt: saved.createdAt,
+          },
+          ...remainingClusters
+        ])
       }
       
       setSelectedClusters([])
@@ -198,31 +270,38 @@ export default function ClusteringPage() {
             </div>
           ) : clusters.length === 0 ? (
             <div className="text-center py-12">
-              <Layers className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600">No clusters detected</p>
-              <Button 
-                className="mt-4" 
-                onClick={handleAnalyze}
-              >
+              <Layers className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+              <p className="text-gray-500 mb-4">No clusters found</p>
+              <Button onClick={handleAnalyze}>
                 Analyze Documents
               </Button>
             </div>
           ) : (
             <>
-              {/* Merge controls */}
-              {selectedClusters.length > 1 && (
-                <div className="flex items-center justify-between bg-primary-50 p-3 rounded-lg">
+              {/* Merge toolbar */}
+              {selectedClusters.length > 0 && (
+                <div className="flex items-center justify-between p-3 bg-primary-50 rounded-lg">
                   <span className="text-sm text-primary-700">
                     {selectedClusters.length} clusters selected
                   </span>
-                  <Button 
-                    size="sm" 
-                    onClick={handleMerge}
-                    loading={merging}
-                  >
-                    <Merge className="mr-2 h-4 w-4" />
-                    Merge Selected
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button 
+                      size="sm" 
+                      variant="ghost"
+                      onClick={() => setSelectedClusters([])}
+                    >
+                      Clear
+                    </Button>
+                    <Button 
+                      size="sm"
+                      onClick={handleMerge}
+                      loading={merging}
+                      disabled={selectedClusters.length < 2}
+                    >
+                      <Merge className="h-4 w-4 mr-1" />
+                      Merge
+                    </Button>
+                  </div>
                 </div>
               )}
 
@@ -232,100 +311,115 @@ export default function ClusteringPage() {
                   <li 
                     key={cluster.id}
                     className={cn(
-                      "p-4 rounded-lg border transition-colors",
+                      'p-4 rounded-lg border transition-colors',
                       selectedClusters.includes(cluster.id)
-                        ? "border-primary-500 bg-primary-50"
-                        : "border-gray-200 bg-white hover:bg-gray-50"
+                        ? 'border-primary-500 bg-primary-50'
+                        : 'border-gray-200 bg-white hover:border-gray-300'
                     )}
                   >
-                    {editingId === cluster.id ? (
-                      <div className="flex gap-2">
-                        <Input
-                          value={editTitle}
-                          onChange={(e) => setEditTitle(e.target.value)}
-                          className="flex-1"
-                          autoFocus
-                        />
-                        <Button size="sm" onClick={handleSaveEdit} loading={loading}>
-                          Save
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
-                          Cancel
-                        </Button>
-                      </div>
-                    ) : (
-                      <div className="flex items-start justify-between">
-                        <div 
-                          className="flex-1 cursor-pointer"
-                          onClick={() => toggleClusterSelection(cluster.id)}
-                        >
+                    <div className="flex items-start gap-3">
+                      {/* Selection checkbox */}
+                      <input
+                        type="checkbox"
+                        checked={selectedClusters.includes(cluster.id)}
+                        onChange={() => toggleClusterSelection(cluster.id)}
+                        className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      />
+                      
+                      <div className="flex-1">
+                        {editingId === cluster.id ? (
                           <div className="flex items-center gap-2">
-                            <h3 className="font-medium text-gray-900">
-                              {index + 1}. {cluster.title}
-                            </h3>
+                            <Input
+                              value={editTitle}
+                              onChange={(e) => setEditTitle(e.target.value)}
+                              className="flex-1"
+                              autoFocus
+                            />
+                            <Button size="sm" onClick={handleSaveEdit} loading={loading}>
+                              Save
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
+                              Cancel
+                            </Button>
                           </div>
-                          {cluster.sourcesJson?.summary && (
-                            <p className="text-sm text-gray-500 mt-1 ml-6">
-                              {cluster.sourcesJson.summary}
-                            </p>
-                          )}
-                          {cluster.sourcesJson?.keywords?.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-2 ml-6">
-                              {cluster.sourcesJson.keywords.slice(0, 5).map((kw: string, i: number) => (
-                                <span 
-                                  key={i}
-                                  className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded"
+                        ) : (
+                          <>
+                            <div className="flex items-center justify-between">
+                              <h3 className="font-medium text-gray-900">
+                                {index + 1}. {cluster.title}
+                              </h3>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => handleEdit(cluster)}
+                                  className="p-1 text-gray-400 hover:text-gray-600"
                                 >
-                                  {kw}
-                                </span>
-                              ))}
+                                  <Edit2 className="h-4 w-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleDelete(cluster.id)}
+                                  className="p-1 text-gray-400 hover:text-red-500"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
                             </div>
-                          )}
-                        </div>
-                        <div className="flex gap-1">
-                          <button
-                            onClick={() => handleEdit(cluster)}
-                            className="p-2 text-gray-400 hover:text-primary-600 transition-colors"
-                          >
-                            <Edit2 className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => handleDelete(cluster.id)}
-                            className="p-2 text-gray-400 hover:text-red-600 transition-colors"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
+                            
+                            {cluster.sourcesJson.summary && (
+                              <p className="text-sm text-gray-500 mt-1">
+                                {cluster.sourcesJson.summary}
+                              </p>
+                            )}
+                            
+                            {cluster.sourcesJson.keywords && cluster.sourcesJson.keywords.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-2">
+                                {cluster.sourcesJson.keywords.slice(0, 5).map((kw, i) => (
+                                  <span 
+                                    key={i}
+                                    className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded"
+                                  >
+                                    {kw}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            
+                            <p className="text-xs text-gray-400 mt-2">
+                              ~{cluster.sourcesJson.estimatedWordCount?.toLocaleString() || '?'} words
+                            </p>
+                          </>
+                        )}
                       </div>
-                    )}
+                    </div>
                   </li>
                 ))}
               </ul>
-
-              {/* Prompt Options Section */}
-              <div className="mt-6 pt-6 border-t border-gray-200">
-                <button
-                  onClick={() => setShowPromptOptions(!showPromptOptions)}
-                  className="flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                >
-                  <Settings2 className="h-4 w-4" />
-                  {showPromptOptions ? 'Hide' : 'Show'} Generation Options
-                </button>
-                
-                {showPromptOptions && (
-                  <div className="mt-4">
-                    <PromptOptionsPanel />
-                  </div>
-                )}
-              </div>
             </>
+          )}
+
+          {/* Prompt Options Toggle */}
+          {clusters.length > 0 && (
+            <div className="border-t pt-4">
+              <button
+                onClick={() => setShowPromptOptions(!showPromptOptions)}
+                className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+              >
+                <Settings2 className="h-4 w-4" />
+                {showPromptOptions ? 'Hide' : 'Show'} Generation Options
+              </button>
+              
+              {showPromptOptions && (
+                <div className="mt-4">
+                  <PromptOptionsPanel />
+                </div>
+              )}
+            </div>
           )}
         </CardBody>
 
         <CardFooter className="flex justify-between">
           <Button 
             variant="ghost" 
-            onClick={() => navigate('/processing')}
+            onClick={() => navigate('/upload')}
           >
             Back
           </Button>

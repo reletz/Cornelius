@@ -880,28 +880,41 @@ spec:
 
 ### Phase 2: Database ✅
 - [x] Create `lib/db.ts` with Dexie schema
-- [x] Create `hooks/useDatabase.ts`
-- [ ] Test IndexedDB operations
+- [x] Create `hooks/useDatabase.ts` (removed - using db.ts directly)
+- [x] Test IndexedDB operations
 
-### Phase 3: LLM
-- [ ] Create `lib/llm.ts`
-- [ ] Embed prompts from backend
+### Phase 3: LLM ✅
+- [x] Create `lib/llm.ts` with OpenAI client
+- [x] Create `lib/clustering.ts` for topic analysis
+- [x] Copy prompts from backend to `src/prompts/`
+- [x] Add TypeScript declarations for .md imports
+- [x] Update vite.config.ts for raw imports
+- [x] Add validation with `google/gemma-3n-e2b-it:free` model
 - [ ] Test API calls from browser
 
-### Phase 4: Document Processing
-- [ ] Create `lib/documentProcessor.ts`
-- [ ] Create `lib/ocr.ts`
+### Phase 4: Document Processing ✅
+- [x] Create `lib/documentProcessor.ts` (PPTX, PDF, DOCX, images)
+- [x] OCR with Tesseract.js (same as backend)
+- [x] Install jszip and pdfjs-dist
 - [ ] Test PDF and image extraction
 
-### Phase 5: PDF Generation
-- [ ] Create `lib/pdfGenerator.ts`
+### Phase 5: PDF Generation ✅
+- [x] Create `lib/pdfGenerator.ts` (same CSS as backend)
+- [x] Create `lib/noteFormatter.ts` (port dari backend)
+- [x] Integrate formatter dengan LLM service
 - [ ] Test PDF export
 
-### Phase 6: UI Updates
-- [ ] Create SettingsPage
-- [ ] Update all pages to use IndexedDB
-- [ ] Remove API calls to backend
-- [ ] Add Settings to navigation
+### Phase 6: UI Updates ✅
+- [x] Create SettingsPage
+- [x] Update ConfigPage to use IndexedDB
+- [x] Update UploadPage with client-side processing
+- [x] Merge ProcessingPage into UploadPage
+- [x] Update ClusteringPage with client-side clustering
+- [x] Update GenerationPage with client-side LLM
+- [x] Update ReviewPage with client-side export
+- [x] Add Settings to navigation (Layout.tsx)
+- [x] Update App.tsx routes
+- [x] Fix all TypeScript errors
 
 ### Phase 7: Cleanup & Docker
 - [ ] Delete backend/ folder
@@ -924,13 +937,13 @@ spec:
 |-------|--------|
 | Phase 1: Setup | ✅ Done |
 | Phase 2: Database | ✅ Done |
-| Phase 3: LLM | 1-2 hours |
-| Phase 4: Document Processing | 2-3 hours |
-| Phase 5: PDF Generation | 1-2 hours |
-| Phase 6: UI Updates | 3-4 hours |
+| Phase 3: LLM | ✅ Done |
+| Phase 4: Document Processing | ✅ Done |
+| Phase 5: PDF Generation | ✅ Done |
+| Phase 6: UI Updates | ✅ Done |
 | Phase 7: Cleanup & Docker | 1 hour |
 | Phase 8: Deploy | 1 hour |
-| **Total Remaining** | **~10-13 hours** |
+| **Total Remaining** | **~2 hours** |
 
 ---
 

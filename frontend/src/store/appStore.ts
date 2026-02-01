@@ -18,6 +18,7 @@ export interface Cluster {
     sourceMapping: Array<{ source: string; slides?: number[] }>
     summary: string
     estimatedWordCount: number
+    uniqueConcepts?: string[]
   }
   orderIndex: number
   createdAt: string
@@ -153,7 +154,7 @@ export const useAppStore = create<AppState>()(
     {
       name: 'cornell-notes-storage',
       partialize: (state) => ({ 
-        apiKey: state.apiKey,
+        // API key is now stored in IndexedDB, not here
         rateLimitEnabled: state.rateLimitEnabled,
         sessionId: state.sessionId,
         currentStep: state.currentStep,

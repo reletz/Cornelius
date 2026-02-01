@@ -6,7 +6,9 @@ import { Card, CardHeader, CardBody, CardFooter } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import ProgressBar from '../components/ui/ProgressBar'
 import { useAppStore } from '../store/appStore'
-import { generateNotes, getGenerationStatus, listNotes, PromptOptionsPayload } from '../lib/api'
+import { getDocuments, addNote, getNotes } from '../lib/db'
+import { generateCornellNotes, TopicContext } from '../lib/llm'
+import { getClusterContent, ClusterResult } from '../lib/clustering'
 import { cn } from '../lib/utils'
 
 // Loading messages that rotate during generation
@@ -23,212 +25,288 @@ const LOADING_MESSAGES = [
   "⚡ Almost there...",
 ]
 
+interface ClusterStatus {
+  clusterId: string
+  status: 'pending' | 'generating' | 'completed' | 'failed'
+  error?: string
+  streamedContent?: string
+}
+
 export default function GenerationPage() {
   const navigate = useNavigate()
   const { 
     sessionId, 
     clusters, 
-    generationTaskId, 
-    setGenerationTaskId,
     setNotes,
     setCurrentStep,
     promptOptions,
     rateLimitEnabled
   } = useAppStore()
   
-  const [status, setStatus] = useState<{
-    status: string
-    progress: number
-    currentCluster: string | null
-    completedClusters: string[]
-    failedClusters: string[]
-  } | null>(null)
-  const [polling, setPolling] = useState(false)
-  const [starting, setStarting] = useState(false)
+  const [clusterStatuses, setClusterStatuses] = useState<ClusterStatus[]>([])
+  const [generating, setGenerating] = useState(false)
+  const [progress, setProgress] = useState(0)
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0)
-  const [regeneratingClusters, setRegeneratingClusters] = useState<Set<string>>(new Set())
   
   // Prevent double-call in React StrictMode
   const hasStartedRef = useRef(false)
 
+  // Initialize cluster statuses
+  useEffect(() => {
+    if (clusters.length > 0 && clusterStatuses.length === 0) {
+      setClusterStatuses(clusters.map(c => ({
+        clusterId: c.id,
+        status: 'pending',
+      })))
+    }
+  }, [clusters]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Rotate loading messages
   useEffect(() => {
-    if (!polling && !starting) return
+    if (!generating) return
     
     const interval = setInterval(() => {
       setLoadingMessageIndex((prev) => (prev + 1) % LOADING_MESSAGES.length)
     }, 3000)
     
     return () => clearInterval(interval)
-  }, [polling, starting])
+  }, [generating])
 
-  // Start generation on mount if no task
+  // Start generation on mount if not started
   useEffect(() => {
-    if (!generationTaskId && sessionId && !hasStartedRef.current) {
-      hasStartedRef.current = true
-      startGeneration()
-    } else if (generationTaskId) {
-      setPolling(true)
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Poll for status
-  useEffect(() => {
-    if (!generationTaskId || !polling) return
-
-    const pollStatus = async () => {
-      try {
-        const result = await getGenerationStatus(generationTaskId)
-        setStatus({
-          status: result.status,
-          progress: result.progress * 100,
-          currentCluster: result.current_cluster,
-          completedClusters: result.completed_clusters || [],
-          failedClusters: result.failed_clusters || [],
-        })
-
-        if (result.status === 'completed' || result.status === 'failed') {
-          setPolling(false)
-          
-          // Clear task ID so user can re-generate fresh if needed
-          setGenerationTaskId(null)
-          
-          // Fetch notes
-          if (sessionId) {
-            const notes = await listNotes(sessionId)
-            setNotes(notes.notes)
-          }
-        }
-      } catch (err) {
-        console.error('Failed to poll status:', err)
+    if (!hasStartedRef.current && sessionId && clusters.length > 0 && clusterStatuses.length > 0) {
+      const hasGenerated = clusterStatuses.some(s => s.status !== 'pending')
+      if (!hasGenerated) {
+        hasStartedRef.current = true
+        startGeneration()
       }
     }
-
-    const interval = setInterval(pollStatus, 2000)
-    pollStatus()
-
-    return () => clearInterval(interval)
-  }, [generationTaskId, polling, sessionId, setNotes, setGenerationTaskId])
+  }, [clusterStatuses]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const startGeneration = async () => {
-    if (!sessionId || starting) return
+    if (!sessionId || generating) return
 
-    setStarting(true)
-    try {
-      // Convert store promptOptions to API format
-      const promptPayload: PromptOptionsPayload = {
-        use_default: promptOptions.useDefault,
-        language: promptOptions.language,
-        depth: promptOptions.depth,
-        custom_prompt: promptOptions.customPrompt || undefined,
-      }
-      
-      const result = await generateNotes(sessionId, undefined, promptPayload, rateLimitEnabled)
-      setGenerationTaskId(result.task_id)
-      setPolling(true)
-      toast.success('Generation started!')
-    } catch (err) {
-      toast.error('Failed to start generation')
-      hasStartedRef.current = false // Allow retry on error
-    } finally {
-      setStarting(false)
-    }
-  }
-
-  // Regenerate a single failed note
-  const regenerateSingleNote = async (clusterId: string) => {
-    if (!sessionId || regeneratingClusters.has(clusterId)) return
-
-    setRegeneratingClusters(prev => new Set(prev).add(clusterId))
+    setGenerating(true)
     
     try {
-      const promptPayload: PromptOptionsPayload = {
-        use_default: promptOptions.useDefault,
-        language: promptOptions.language,
-        depth: promptOptions.depth,
-        custom_prompt: promptOptions.customPrompt || undefined,
-      }
+      const docs = await getDocuments(sessionId)
       
-      const result = await generateNotes(sessionId, [clusterId], promptPayload, rateLimitEnabled)
-      toast.success('Regenerating note...')
-      
-      // Poll for this specific regeneration
-      const pollRegeneration = async () => {
+      // Generate notes for each cluster sequentially
+      for (let i = 0; i < clusters.length; i++) {
+        const cluster = clusters[i]
+        
+        // Update status to generating
+        setClusterStatuses(prev => prev.map(s => 
+          s.clusterId === cluster.id 
+            ? { ...s, status: 'generating' as const, streamedContent: '' }
+            : s
+        ))
+        setProgress(((i) / clusters.length) * 100)
+
+        // Get other topics for uniqueness context
+        const otherTopics: TopicContext[] = clusters
+          .filter(c => c.id !== cluster.id)
+          .map(c => ({
+            title: c.title,
+            keywords: c.sourcesJson.keywords,
+            summary: c.sourcesJson.summary,
+            uniqueConcepts: c.sourcesJson.uniqueConcepts,
+          }))
+
+        // Get content for this cluster
+        const clusterData: ClusterResult = {
+          id: cluster.id,
+          title: cluster.title,
+          keywords: cluster.sourcesJson.keywords || [],
+          sourceMapping: cluster.sourcesJson.sourceMapping || [],
+          summary: cluster.sourcesJson.summary || '',
+          estimatedWordCount: cluster.sourcesJson.estimatedWordCount || 0,
+          uniqueConcepts: cluster.sourcesJson.uniqueConcepts || [],
+        }
+        const sourceContent = getClusterContent(clusterData, docs)
+
         try {
-          const regenerateStatus = await getGenerationStatus(result.task_id)
+          // Generate with streaming
+          let fullContent = ''
           
-          if (regenerateStatus.status === 'completed' || regenerateStatus.status === 'failed') {
-            setRegeneratingClusters(prev => {
-              const next = new Set(prev)
-              next.delete(clusterId)
-              return next
-            })
-            
-            // Update status based on regeneration result
-            if (regenerateStatus.completed_clusters?.includes(clusterId)) {
-              setStatus(prev => prev ? {
-                ...prev,
-                completedClusters: [...prev.completedClusters.filter(id => id !== clusterId), clusterId],
-                failedClusters: prev.failedClusters.filter(id => id !== clusterId)
-              } : null)
-              toast.success('Note regenerated successfully!')
-              
-              // Refresh notes
-              const notes = await listNotes(sessionId)
-              setNotes(notes.notes)
-            } else {
-              toast.error('Note regeneration failed')
-            }
-            return true // Stop polling
-          }
-          return false // Continue polling
+          const result = await generateCornellNotes({
+            topicTitle: cluster.title,
+            sourceContent,
+            language: promptOptions.language,
+            depth: promptOptions.depth === 'concise' ? 'concise' : 
+                   promptOptions.depth === 'indepth' ? 'indepth' : 'balanced',
+            customPrompt: promptOptions.useDefault ? undefined : promptOptions.customPrompt,
+            otherTopics,
+            onChunk: (chunk) => {
+              fullContent += chunk
+              setClusterStatuses(prev => prev.map(s => 
+                s.clusterId === cluster.id 
+                  ? { ...s, streamedContent: fullContent }
+                  : s
+              ))
+            },
+          })
+
+          // Save to IndexedDB
+          await addNote(sessionId, cluster.id, result)
+
+          // Update status to completed
+          setClusterStatuses(prev => prev.map(s => 
+            s.clusterId === cluster.id 
+              ? { ...s, status: 'completed' as const }
+              : s
+          ))
+
         } catch (err) {
-          console.error('Failed to poll regeneration status:', err)
-          return false
+          console.error(`Failed to generate note for ${cluster.title}:`, err)
+          
+          setClusterStatuses(prev => prev.map(s => 
+            s.clusterId === cluster.id 
+              ? { 
+                  ...s, 
+                  status: 'failed' as const, 
+                  error: err instanceof Error ? err.message : 'Generation failed'
+                }
+              : s
+          ))
+        }
+
+        // Rate limiting delay if enabled
+        if (rateLimitEnabled && i < clusters.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 2000))
         }
       }
+
+      setProgress(100)
       
-      // Start polling
-      const pollInterval = setInterval(async () => {
-        const done = await pollRegeneration()
-        if (done) clearInterval(pollInterval)
-      }, 2000)
+      // Load notes from DB
+      const savedNotes = await getNotes(sessionId)
+      setNotes(savedNotes.map(n => ({
+        id: n.id,
+        clusterId: n.clusterId,
+        markdownContent: n.content,
+        status: 'generated' as const,
+        createdAt: n.createdAt,
+      })))
+      
+      toast.success('Notes generated successfully!')
       
     } catch (err) {
-      toast.error('Failed to start regeneration')
-      setRegeneratingClusters(prev => {
-        const next = new Set(prev)
-        next.delete(clusterId)
-        return next
-      })
+      console.error('Generation failed:', err)
+      toast.error('Failed to generate notes')
+      hasStartedRef.current = false
+    } finally {
+      setGenerating(false)
     }
   }
 
-  const getClusterStatus = (clusterId: string) => {
-    if (regeneratingClusters.has(clusterId)) return 'regenerating'
-    if (!status) return 'pending'
-    if (status.completedClusters.includes(clusterId)) return 'completed'
-    if (status.failedClusters.includes(clusterId)) return 'failed'
-    if (status.currentCluster === clusterId) return 'processing'
-    return 'pending'
+  const regenerateSingle = async (clusterId: string) => {
+    if (!sessionId) return
+    
+    const cluster = clusters.find(c => c.id === clusterId)
+    if (!cluster) return
+
+    // Update status
+    setClusterStatuses(prev => prev.map(s => 
+      s.clusterId === clusterId 
+        ? { ...s, status: 'generating' as const, streamedContent: '', error: undefined }
+        : s
+    ))
+
+    try {
+      const docs = await getDocuments(sessionId)
+      
+      const otherTopics: TopicContext[] = clusters
+        .filter(c => c.id !== clusterId)
+        .map(c => ({
+          title: c.title,
+          keywords: c.sourcesJson.keywords,
+          summary: c.sourcesJson.summary,
+          uniqueConcepts: c.sourcesJson.uniqueConcepts,
+        }))
+
+      const clusterData: ClusterResult = {
+        id: cluster.id,
+        title: cluster.title,
+        keywords: cluster.sourcesJson.keywords || [],
+        sourceMapping: cluster.sourcesJson.sourceMapping || [],
+        summary: cluster.sourcesJson.summary || '',
+        estimatedWordCount: cluster.sourcesJson.estimatedWordCount || 0,
+        uniqueConcepts: cluster.sourcesJson.uniqueConcepts || [],
+      }
+      const sourceContent = getClusterContent(clusterData, docs)
+
+      let fullContent = ''
+      
+      const result = await generateCornellNotes({
+        topicTitle: cluster.title,
+        sourceContent,
+        language: promptOptions.language,
+        depth: promptOptions.depth === 'concise' ? 'concise' : 
+               promptOptions.depth === 'indepth' ? 'indepth' : 'balanced',
+        customPrompt: promptOptions.useDefault ? undefined : promptOptions.customPrompt,
+        otherTopics,
+        onChunk: (chunk) => {
+          fullContent += chunk
+          setClusterStatuses(prev => prev.map(s => 
+            s.clusterId === clusterId 
+              ? { ...s, streamedContent: fullContent }
+              : s
+          ))
+        },
+      })
+
+      await addNote(sessionId, cluster.id, result)
+
+      setClusterStatuses(prev => prev.map(s => 
+        s.clusterId === clusterId 
+          ? { ...s, status: 'completed' as const }
+          : s
+      ))
+
+      // Refresh notes
+      const savedNotes = await getNotes(sessionId)
+      setNotes(savedNotes.map(n => ({
+        id: n.id,
+        clusterId: n.clusterId,
+        markdownContent: n.content,
+        status: 'generated' as const,
+        createdAt: n.createdAt,
+      })))
+
+      toast.success('Note regenerated!')
+
+    } catch (err) {
+      setClusterStatuses(prev => prev.map(s => 
+        s.clusterId === clusterId 
+          ? { 
+              ...s, 
+              status: 'failed' as const, 
+              error: err instanceof Error ? err.message : 'Regeneration failed'
+            }
+          : s
+      ))
+      toast.error('Failed to regenerate note')
+    }
   }
 
-  const getStatusIcon = (clusterStatus: string) => {
-    switch (clusterStatus) {
+  const getStatusIcon = (status: ClusterStatus['status']) => {
+    switch (status) {
       case 'completed':
         return <CheckCircle className="h-5 w-5 text-green-500" />
       case 'failed':
         return <XCircle className="h-5 w-5 text-red-500" />
-      case 'processing':
-      case 'regenerating':
+      case 'generating':
         return <Loader2 className="h-5 w-5 text-primary-500 animate-spin" />
       default:
         return <div className="h-5 w-5 rounded-full border-2 border-gray-300" />
     }
   }
 
-  const isComplete = status?.status === 'completed'
-  const hasNotes = (status?.completedClusters.length || 0) > 0
+  const completedCount = clusterStatuses.filter(s => s.status === 'completed').length
+  const failedCount = clusterStatuses.filter(s => s.status === 'failed').length
+  const isComplete = completedCount + failedCount === clusters.length && clusters.length > 0
+  const hasNotes = completedCount > 0
 
   const handleContinue = () => {
     if (!hasNotes) {
@@ -260,7 +338,7 @@ export default function GenerationPage() {
               </h2>
               <p className="text-sm text-gray-500">
                 {isComplete 
-                  ? `${status?.completedClusters.length} notes generated successfully`
+                  ? `${completedCount} notes generated successfully`
                   : 'Creating detailed notes with AI...'
                 }
               </p>
@@ -270,7 +348,7 @@ export default function GenerationPage() {
 
         <CardBody className="space-y-6">
           {/* Loading Message */}
-          {(polling || starting) && !isComplete && (
+          {generating && !isComplete && (
             <div className="flex items-center justify-center gap-3 p-4 bg-primary-50 rounded-lg border border-primary-200">
               <Loader2 className="h-5 w-5 text-primary-600 animate-spin" />
               <span className="text-sm font-medium text-primary-700 animate-pulse">
@@ -284,10 +362,10 @@ export default function GenerationPage() {
             <div className="flex justify-between text-sm">
               <span className="text-gray-600">Overall Progress</span>
               <span className="text-gray-900 font-medium">
-                {Math.round(status?.progress || 0)}%
+                {Math.round(progress)}%
               </span>
             </div>
-            <ProgressBar value={status?.progress || 0} />
+            <ProgressBar value={progress} />
           </div>
 
           {/* Cluster status list */}
@@ -295,67 +373,66 @@ export default function GenerationPage() {
             <h3 className="font-medium text-gray-700">Topics</h3>
             <ul className="space-y-2">
               {clusters.map((cluster, index) => {
-                const clusterStatus = getClusterStatus(cluster.id)
+                const statusInfo = clusterStatuses.find(s => s.clusterId === cluster.id)
+                const status = statusInfo?.status || 'pending'
                 
                 return (
                   <li 
                     key={cluster.id}
                     className={cn(
-                      "flex items-center justify-between p-3 rounded-lg",
-                      (clusterStatus === 'processing' || clusterStatus === 'regenerating') && "bg-primary-50 border border-primary-200",
-                      clusterStatus === 'completed' && "bg-green-50",
-                      clusterStatus === 'failed' && "bg-red-50",
-                      clusterStatus === 'pending' && "bg-gray-50"
+                      'flex items-center justify-between p-3 rounded-lg',
+                      status === 'failed' ? 'bg-red-50' : 'bg-gray-50'
                     )}
                   >
                     <div className="flex items-center gap-3">
-                      {getStatusIcon(clusterStatus)}
-                      <span className="text-sm font-medium text-gray-900">
-                        {index + 1}. {cluster.title}
-                      </span>
+                      {getStatusIcon(status)}
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">
+                          {index + 1}. {cluster.title}
+                        </p>
+                        {status === 'generating' && statusInfo?.streamedContent && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            {statusInfo.streamedContent.length.toLocaleString()} characters generated...
+                          </p>
+                        )}
+                        {status === 'failed' && statusInfo?.error && (
+                          <p className="text-xs text-red-600 mt-1">
+                            {statusInfo.error}
+                          </p>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      {clusterStatus === 'failed' && isComplete && (
-                        <button
-                          onClick={() => regenerateSingleNote(cluster.id)}
-                          className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-700 bg-red-100 hover:bg-red-200 rounded transition-colors"
-                          title="Regenerate this note"
-                        >
-                          <RefreshCw className="h-3 w-3" />
-                          Retry
-                        </button>
-                      )}
-                      <span className={cn(
-                        "text-xs font-medium px-2 py-1 rounded",
-                        clusterStatus === 'completed' && "bg-green-100 text-green-700",
-                        clusterStatus === 'failed' && "bg-red-100 text-red-700",
-                        (clusterStatus === 'processing' || clusterStatus === 'regenerating') && "bg-primary-100 text-primary-700",
-                        clusterStatus === 'pending' && "bg-gray-100 text-gray-600"
-                      )}>
-                        {clusterStatus === 'processing' ? 'Generating...' : 
-                         clusterStatus === 'regenerating' ? 'Regenerating...' : clusterStatus}
-                      </span>
-                    </div>
+                    
+                    {status === 'failed' && !generating && (
+                      <Button 
+                        size="sm" 
+                        variant="ghost"
+                        onClick={() => regenerateSingle(cluster.id)}
+                      >
+                        <RefreshCw className="h-4 w-4 mr-1" />
+                        Retry
+                      </Button>
+                    )}
                   </li>
                 )
               })}
             </ul>
           </div>
 
-          {/* Stats when complete */}
+          {/* Stats */}
           {isComplete && (
-            <div className="grid grid-cols-2 gap-4">
-              <div className="text-center p-4 bg-green-50 rounded-lg">
-                <p className="text-3xl font-bold text-green-600">
-                  {status?.completedClusters.length}
-                </p>
-                <p className="text-sm text-green-700">Notes Generated</p>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="text-center p-3 bg-green-50 rounded-lg">
+                <p className="text-2xl font-bold text-green-600">{completedCount}</p>
+                <p className="text-sm text-green-700">Successful</p>
               </div>
-              <div className="text-center p-4 bg-red-50 rounded-lg">
-                <p className="text-3xl font-bold text-red-600">
-                  {status?.failedClusters.length}
-                </p>
+              <div className="text-center p-3 bg-red-50 rounded-lg">
+                <p className="text-2xl font-bold text-red-600">{failedCount}</p>
                 <p className="text-sm text-red-700">Failed</p>
+              </div>
+              <div className="text-center p-3 bg-gray-100 rounded-lg">
+                <p className="text-2xl font-bold text-gray-600">{clusters.length}</p>
+                <p className="text-sm text-gray-700">Total</p>
               </div>
             </div>
           )}
@@ -365,16 +442,26 @@ export default function GenerationPage() {
           <Button 
             variant="ghost" 
             onClick={() => navigate('/clustering')}
+            disabled={generating}
           >
             Back
           </Button>
-          <Button 
-            onClick={handleContinue}
-            disabled={!isComplete || !hasNotes}
-          >
-            Review Notes
-            <ArrowRight className="ml-2 h-4 w-4" />
-          </Button>
+          <div className="flex gap-2">
+            {!generating && !isComplete && (
+              <Button onClick={startGeneration}>
+                Start Generation
+              </Button>
+            )}
+            {isComplete && (
+              <Button 
+                onClick={handleContinue}
+                disabled={!hasNotes}
+              >
+                Review Notes
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            )}
+          </div>
         </CardFooter>
       </Card>
     </div>

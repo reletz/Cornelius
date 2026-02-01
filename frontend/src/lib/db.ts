@@ -1,15 +1,15 @@
 import Dexie, { Table } from 'dexie';
 
-// ===== Types =====
+// ===== Internal Database Types =====
 
-export interface Session {
+interface DBSession {
   id: string;
   name: string;
   createdAt: Date;
   updatedAt: Date;
 }
 
-export interface Document {
+interface DBDocument {
   id: string;
   sessionId: string;
   filename: string;
@@ -19,26 +19,27 @@ export interface Document {
   createdAt: Date;
 }
 
-export interface Cluster {
+interface DBCluster {
   id: string;
   sessionId: string;
   title: string;
-  description: string;
-  documentIds: string[];
-  combinedContent: string;
+  sourcesJson: {
+    keywords: string[];
+    sourceMapping: Array<{ source: string; slides?: number[] }>;
+    summary: string;
+    estimatedWordCount: number;
+    uniqueConcepts?: string[];
+  };
+  orderIndex: number;
   createdAt: Date;
 }
 
-export interface Note {
+interface DBNote {
   id: string;
   sessionId: string;
   clusterId: string;
-  title: string;
-  rawMarkdown: string;    // full cornell format from LLM
-  status: 'pending' | 'generating' | 'completed' | 'error';
-  errorMessage?: string;
+  content: string;
   createdAt: Date;
-  updatedAt: Date;
 }
 
 export interface Settings {
@@ -53,10 +54,10 @@ export interface Settings {
 // ===== Database =====
 
 class CornellDB extends Dexie {
-  sessions!: Table<Session>;
-  documents!: Table<Document>;
-  clusters!: Table<Cluster>;
-  notes!: Table<Note>;
+  sessions!: Table<DBSession>;
+  documents!: Table<DBDocument>;
+  clusters!: Table<DBCluster>;
+  notes!: Table<DBNote>;
   settings!: Table<Settings>;
 
   constructor() {
@@ -65,8 +66,8 @@ class CornellDB extends Dexie {
     this.version(1).stores({
       sessions: 'id, name, createdAt, updatedAt',
       documents: 'id, sessionId, filename, createdAt',
-      clusters: 'id, sessionId, createdAt',
-      notes: 'id, sessionId, clusterId, status, createdAt, updatedAt',
+      clusters: 'id, sessionId, orderIndex, createdAt',
+      notes: 'id, sessionId, clusterId, createdAt',
       settings: 'id'
     });
   }
@@ -80,7 +81,7 @@ const DEFAULT_SETTINGS: Settings = {
   id: 'main',
   apiKey: '',
   baseUrl: 'https://openrouter.ai/api/v1',
-  model: 'anthropic/claude-sonnet-4',
+  model: 'tngtech/deepseek-r1t2-chimera:free',
   language: 'en',
   style: 'balanced'
 };
@@ -107,29 +108,41 @@ export function generateId(): string {
   return crypto.randomUUID();
 }
 
+export interface Session {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export async function createSession(name?: string): Promise<Session> {
   const now = new Date();
-  const session: Session = {
+  const session: DBSession = {
     id: generateId(),
     name: name || `Session ${now.toLocaleDateString()}`,
     createdAt: now,
     updatedAt: now
   };
   await db.sessions.add(session);
-  return session;
+  return {
+    ...session,
+    createdAt: session.createdAt.toISOString(),
+    updatedAt: session.updatedAt.toISOString(),
+  };
 }
 
 export async function getSession(id: string): Promise<Session | undefined> {
-  return db.sessions.get(id);
-}
-
-export async function updateSession(id: string, updates: Partial<Omit<Session, 'id' | 'createdAt'>>): Promise<void> {
-  await db.sessions.update(id, { ...updates, updatedAt: new Date() });
+  const session = await db.sessions.get(id);
+  if (!session) return undefined;
+  return {
+    ...session,
+    createdAt: session.createdAt.toISOString(),
+    updatedAt: session.updatedAt.toISOString(),
+  };
 }
 
 export async function deleteSession(id: string): Promise<void> {
   await db.transaction('rw', [db.sessions, db.documents, db.clusters, db.notes], async () => {
-    // Delete all related data
     await db.notes.where('sessionId').equals(id).delete();
     await db.clusters.where('sessionId').equals(id).delete();
     await db.documents.where('sessionId').equals(id).delete();
@@ -137,28 +150,54 @@ export async function deleteSession(id: string): Promise<void> {
   });
 }
 
-export async function listSessions(): Promise<Session[]> {
-  return db.sessions.orderBy('updatedAt').reverse().toArray();
-}
-
 // ===== Document Helpers =====
 
-export async function addDocument(doc: Omit<Document, 'id' | 'createdAt'>): Promise<Document> {
-  const document: Document = {
-    ...doc,
+export interface Document {
+  id: string;
+  sessionId: string;
+  filename: string;
+  content: string;
+  createdAt: string;
+}
+
+export async function addDocument(
+  sessionId: string,
+  filename: string,
+  content: string
+): Promise<Document> {
+  const now = new Date();
+  const doc: DBDocument = {
     id: generateId(),
-    createdAt: new Date()
+    sessionId,
+    filename,
+    content,
+    fileType: filename.split('.').pop() || 'unknown',
+    fileSize: content.length,
+    createdAt: now
   };
-  await db.documents.add(document);
+  await db.documents.add(doc);
   
   // Update session timestamp
-  await updateSession(doc.sessionId, {});
+  await db.sessions.update(sessionId, { updatedAt: now });
   
-  return document;
+  return {
+    id: doc.id,
+    sessionId: doc.sessionId,
+    filename: doc.filename,
+    content: doc.content,
+    createdAt: doc.createdAt.toISOString(),
+  };
 }
 
 export async function getDocuments(sessionId: string): Promise<Document[]> {
-  return db.documents.where('sessionId').equals(sessionId).toArray();
+  const docs = await db.documents.where('sessionId').equals(sessionId).toArray();
+  return docs.map(d => ({
+    id: d.id,
+    sessionId: d.sessionId,
+    filename: d.filename,
+    content: d.content,
+    createdAt: d.createdAt.toISOString(),
+  }));
 }
 
 export async function deleteDocument(id: string): Promise<void> {
@@ -167,21 +206,65 @@ export async function deleteDocument(id: string): Promise<void> {
 
 // ===== Cluster Helpers =====
 
-export async function addCluster(cluster: Omit<Cluster, 'id' | 'createdAt'>): Promise<Cluster> {
-  const newCluster: Cluster = {
-    ...cluster,
+export interface ClusterSourcesJson {
+  keywords: string[];
+  sourceMapping: Array<{ source: string; slides?: number[] }>;
+  summary: string;
+  estimatedWordCount: number;
+  uniqueConcepts?: string[];
+}
+
+export interface Cluster {
+  id: string;
+  sessionId: string;
+  title: string;
+  sourcesJson: ClusterSourcesJson;
+  orderIndex: number;
+  createdAt: string;
+}
+
+export async function addCluster(
+  sessionId: string,
+  title: string,
+  sourcesJson: ClusterSourcesJson,
+  orderIndex: number
+): Promise<Cluster> {
+  const now = new Date();
+  const cluster: DBCluster = {
     id: generateId(),
-    createdAt: new Date()
+    sessionId,
+    title,
+    sourcesJson,
+    orderIndex,
+    createdAt: now
   };
-  await db.clusters.add(newCluster);
-  return newCluster;
+  await db.clusters.add(cluster);
+  return {
+    id: cluster.id,
+    sessionId: cluster.sessionId,
+    title: cluster.title,
+    sourcesJson: cluster.sourcesJson,
+    orderIndex: cluster.orderIndex,
+    createdAt: cluster.createdAt.toISOString(),
+  };
 }
 
 export async function getClusters(sessionId: string): Promise<Cluster[]> {
-  return db.clusters.where('sessionId').equals(sessionId).toArray();
+  const clusters = await db.clusters.where('sessionId').equals(sessionId).sortBy('orderIndex');
+  return clusters.map(c => ({
+    id: c.id,
+    sessionId: c.sessionId,
+    title: c.title,
+    sourcesJson: c.sourcesJson,
+    orderIndex: c.orderIndex,
+    createdAt: c.createdAt.toISOString(),
+  }));
 }
 
-export async function updateCluster(id: string, updates: Partial<Omit<Cluster, 'id' | 'createdAt' | 'sessionId'>>): Promise<void> {
+export async function updateCluster(
+  id: string,
+  updates: Partial<Pick<Cluster, 'title' | 'sourcesJson' | 'orderIndex'>>
+): Promise<void> {
   await db.clusters.update(id, updates);
 }
 
@@ -192,129 +275,76 @@ export async function deleteCluster(id: string): Promise<void> {
   });
 }
 
-export async function mergeClusters(clusterIds: string[], newTitle: string): Promise<Cluster> {
-  const clusters = await db.clusters.where('id').anyOf(clusterIds).toArray();
-  
-  if (clusters.length < 2) {
-    throw new Error('Need at least 2 clusters to merge');
-  }
-  
-  const sessionId = clusters[0].sessionId;
-  const documentIds = [...new Set(clusters.flatMap(c => c.documentIds))];
-  const combinedContent = clusters.map(c => c.combinedContent).join('\n\n---\n\n');
-  const description = clusters.map(c => c.description).join(' | ');
-  
-  // Create merged cluster
-  const merged = await addCluster({
-    sessionId,
-    title: newTitle,
-    description,
-    documentIds,
-    combinedContent
-  });
-  
-  // Delete old clusters
-  await db.transaction('rw', [db.clusters, db.notes], async () => {
-    for (const id of clusterIds) {
-      await db.notes.where('clusterId').equals(id).delete();
-      await db.clusters.delete(id);
-    }
-  });
-  
-  return merged;
-}
-
 // ===== Note Helpers =====
 
-export async function addNote(note: Omit<Note, 'id' | 'createdAt' | 'updatedAt'>): Promise<Note> {
+export interface Note {
+  id: string;
+  sessionId: string;
+  clusterId: string;
+  content: string;
+  createdAt: string;
+}
+
+export async function addNote(
+  sessionId: string,
+  clusterId: string,
+  content: string
+): Promise<Note> {
   const now = new Date();
-  const newNote: Note = {
-    ...note,
+  
+  // Check if note already exists for this cluster, update if so
+  const existing = await db.notes.where('clusterId').equals(clusterId).first();
+  if (existing) {
+    await db.notes.update(existing.id, { content, createdAt: now });
+    return {
+      id: existing.id,
+      sessionId,
+      clusterId,
+      content,
+      createdAt: now.toISOString(),
+    };
+  }
+  
+  const note: DBNote = {
     id: generateId(),
-    createdAt: now,
-    updatedAt: now
+    sessionId,
+    clusterId,
+    content,
+    createdAt: now
   };
-  await db.notes.add(newNote);
-  return newNote;
+  await db.notes.add(note);
+  return {
+    id: note.id,
+    sessionId: note.sessionId,
+    clusterId: note.clusterId,
+    content: note.content,
+    createdAt: note.createdAt.toISOString(),
+  };
 }
 
 export async function getNotes(sessionId: string): Promise<Note[]> {
-  return db.notes.where('sessionId').equals(sessionId).toArray();
+  const notes = await db.notes.where('sessionId').equals(sessionId).toArray();
+  return notes.map(n => ({
+    id: n.id,
+    sessionId: n.sessionId,
+    clusterId: n.clusterId,
+    content: n.content,
+    createdAt: n.createdAt.toISOString(),
+  }));
 }
 
 export async function getNote(id: string): Promise<Note | undefined> {
-  return db.notes.get(id);
-}
-
-export async function getNoteByCluster(clusterId: string): Promise<Note | undefined> {
-  return db.notes.where('clusterId').equals(clusterId).first();
-}
-
-export async function updateNote(id: string, updates: Partial<Omit<Note, 'id' | 'createdAt' | 'sessionId' | 'clusterId'>>): Promise<void> {
-  await db.notes.update(id, { ...updates, updatedAt: new Date() });
+  const note = await db.notes.get(id);
+  if (!note) return undefined;
+  return {
+    id: note.id,
+    sessionId: note.sessionId,
+    clusterId: note.clusterId,
+    content: note.content,
+    createdAt: note.createdAt.toISOString(),
+  };
 }
 
 export async function deleteNote(id: string): Promise<void> {
   await db.notes.delete(id);
-}
-
-// ===== Bulk Operations =====
-
-export async function clearAllData(): Promise<void> {
-  await db.transaction('rw', [db.sessions, db.documents, db.clusters, db.notes], async () => {
-    await db.notes.clear();
-    await db.clusters.clear();
-    await db.documents.clear();
-    await db.sessions.clear();
-  });
-}
-
-export async function exportSessionData(sessionId: string): Promise<{
-  session: Session;
-  documents: Document[];
-  clusters: Cluster[];
-  notes: Note[];
-}> {
-  const session = await db.sessions.get(sessionId);
-  if (!session) {
-    throw new Error('Session not found');
-  }
-  
-  const documents = await getDocuments(sessionId);
-  const clusters = await getClusters(sessionId);
-  const notes = await getNotes(sessionId);
-  
-  return { session, documents, clusters, notes };
-}
-
-export async function importSessionData(data: {
-  session: Omit<Session, 'id'>;
-  documents: Omit<Document, 'id' | 'sessionId'>[];
-  clusters: Omit<Cluster, 'id' | 'sessionId'>[];
-  notes: Omit<Note, 'id' | 'sessionId'>[];
-}): Promise<string> {
-  const session = await createSession(data.session.name);
-  
-  const docIdMap = new Map<string, string>();
-  
-  for (const doc of data.documents) {
-    const newDoc = await addDocument({ ...doc, sessionId: session.id });
-    // We don't have old IDs in this format, but could extend if needed
-  }
-  
-  for (const cluster of data.clusters) {
-    await addCluster({ ...cluster, sessionId: session.id });
-  }
-  
-  for (const note of data.notes) {
-    await db.notes.add({
-      ...note,
-      id: generateId(),
-      sessionId: session.id,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    } as Note);
-  }
-  
-  return session.id;
 }

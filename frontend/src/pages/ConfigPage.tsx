@@ -1,56 +1,81 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Key, CheckCircle, AlertCircle, ArrowRight, Gauge } from 'lucide-react'
+import { Key, CheckCircle, AlertCircle, ArrowRight, Gauge, Settings } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { Card, CardHeader, CardBody, CardFooter } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import { useAppStore } from '../store/appStore'
-import { validateApiKey, createSession } from '../lib/api'
+import { getSettings, updateSettings, createSession } from '../lib/db'
+import { validateApiKey } from '../lib/llm'
 
 export default function ConfigPage() {
   const navigate = useNavigate()
-  const { apiKey, setApiKey, setSessionId, setCurrentStep, rateLimitEnabled, setRateLimitEnabled } = useAppStore()
+  const { setSessionId, setCurrentStep, rateLimitEnabled, setRateLimitEnabled } = useAppStore()
   
-  const [key, setKey] = useState(apiKey || '')
-  const [loading, setLoading] = useState(false)
-  const [validated, setValidated] = useState(!!apiKey)
+  const [apiKey, setApiKey] = useState('')
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [continuing, setContinuing] = useState(false)
+  const [validating, setValidating] = useState(false)
+  const [validated, setValidated] = useState(false)
   const [error, setError] = useState('')
 
+  // Load settings on mount
+  useEffect(() => {
+    loadSettings()
+  }, [])
+
+  const loadSettings = async () => {
+    try {
+      const settings = await getSettings()
+      if (settings.apiKey) {
+        setApiKey(settings.apiKey)
+        setValidated(true)
+      }
+    } catch (err) {
+      console.error('Failed to load settings:', err)
+    } finally {
+      setInitialLoading(false)
+    }
+  }
+
   const handleValidate = async () => {
-    if (!key.trim()) {
+    if (!apiKey.trim()) {
       setError('Please enter your OpenRouter API key')
       return
     }
     
-    if (loading) return // Prevent double-click
+    if (validating) return
 
-    setLoading(true)
+    setValidating(true)
     setError('')
 
     try {
-      const result = await validateApiKey(key.trim())
+      const settings = await getSettings()
+      const result = await validateApiKey(apiKey.trim(), settings.baseUrl)
       
       if (result.valid) {
-        setApiKey(key.trim())
+        // Save API key to IndexedDB
+        await updateSettings({ apiKey: apiKey.trim() })
         setValidated(true)
         toast.success('API key validated successfully!')
       } else {
-        setError(result.message || 'Invalid API key')
+        setError(result.message)
       }
     } catch (err) {
       setError('Failed to validate API key. Please check your connection.')
     } finally {
-      setLoading(false)
+      setValidating(false)
     }
   }
 
   const handleContinue = async () => {
-    if (loading) return // Prevent double-click
+    if (continuing) return
     
-    setLoading(true)
+    setContinuing(true)
     
     try {
+      // Create a new session in IndexedDB
       const session = await createSession()
       setSessionId(session.id)
       setCurrentStep(1)
@@ -58,15 +83,27 @@ export default function ConfigPage() {
     } catch (err) {
       toast.error('Failed to create session')
     } finally {
-      setLoading(false)
+      setContinuing(false)
     }
   }
 
-  const handleClear = () => {
-    setApiKey(null)
-    setKey('')
+  const handleClear = async () => {
+    await updateSettings({ apiKey: '' })
+    setApiKey('')
     setValidated(false)
     setError('')
+  }
+
+  if (initialLoading) {
+    return (
+      <div className="max-w-lg mx-auto">
+        <Card>
+          <CardBody className="py-12 text-center">
+            <p className="text-gray-500">Loading...</p>
+          </CardBody>
+        </Card>
+      </div>
+    )
   }
 
   return (
@@ -94,8 +131,8 @@ export default function ConfigPage() {
               🔑 Bring Your Own Key (BYOK)
             </h3>
             <p className="text-sm text-blue-700">
-              Your API key is stored locally in your browser and is never sent to our servers.
-              We use free models from OpenRouter for processing.
+              Your API key is stored locally in your browser (IndexedDB).
+              All LLM calls go directly from your browser to OpenRouter - no server involved.
             </p>
           </div>
 
@@ -103,15 +140,15 @@ export default function ConfigPage() {
             label="OpenRouter API Key"
             type="password"
             placeholder="sk-or-v1-..."
-            value={key}
+            value={apiKey}
             onChange={(e) => {
-              setKey(e.target.value)
+              setApiKey(e.target.value)
               setValidated(false)
               setError('')
             }}
             error={error}
             helperText="Get your API key from OpenRouter"
-            disabled={loading}
+            disabled={validating}
           />
 
           {validated && (
@@ -164,15 +201,39 @@ export default function ConfigPage() {
               }
             </p>
           </div>
+
+          {/* Info box about client-side processing */}
+          <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+            <h3 className="font-medium text-green-800 mb-2">
+              Client-Side Processing
+            </h3>
+            <p className="text-sm text-green-700">
+              This app runs entirely in your browser:
+            </p>
+            <ul className="text-sm text-green-700 mt-2 space-y-1">
+              <li>✓ Documents processed locally (OCR, text extraction)</li>
+              <li>✓ Data stored in browser (IndexedDB)</li>
+              <li>✓ PDF export generated in browser</li>
+            </ul>
+          </div>
         </CardBody>
 
         <CardFooter className="flex justify-between">
           {validated ? (
             <>
-              <Button variant="ghost" onClick={handleClear}>
-                Change Key
-              </Button>
-              <Button onClick={handleContinue} loading={loading}>
+              <div className="flex gap-2">
+                <Button variant="ghost" onClick={handleClear}>
+                  Change Key
+                </Button>
+                <Button 
+                  variant="ghost" 
+                  onClick={() => navigate('/settings')}
+                >
+                  <Settings className="h-4 w-4 mr-1" />
+                  Settings
+                </Button>
+              </div>
+              <Button onClick={handleContinue} loading={continuing}>
                 Continue
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
@@ -187,7 +248,7 @@ export default function ConfigPage() {
               >
                 Get an API key →
               </a>
-              <Button onClick={handleValidate} loading={loading}>
+              <Button onClick={handleValidate} loading={validating}>
                 Validate Key
               </Button>
             </>

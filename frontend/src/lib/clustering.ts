@@ -8,7 +8,7 @@ import { getSettings, Document } from './db';
 
 export interface ClusterSourceMapping {
   source: string;
-  slides: number[];
+  slides?: number[];
 }
 
 export interface ClusterResult {

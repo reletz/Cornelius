@@ -1,20 +1,14 @@
-version: '3.8'
-
 services:
   cornell-notes:
-    build: .
-    image: cornell-notes:latest
-    container_name: cornell-notes
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
-      - "8000:8000"
-    volumes:
-      - ./cornell_data:/app/data
-    environment:
-      - DATABASE_URL=sqlite+aiosqlite:///./data/cornell.db
+      - "8080:80"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 3s
       retries: 3
-      start_period: 10s
+      start_period: 5s
